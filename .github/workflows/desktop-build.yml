@@ -48,7 +48,7 @@ jobs:
         run: npm install
 
       - name: Build Tauri app
-        run: npm run tauri build
+        run: npm run tauri:build
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
