@@ -8,7 +8,6 @@ const FALLBACK_ICON_PNG: &[u8] = &[
     0xFB, 0x59, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
 ];
 
-<<<<<<< codex/fix-app-build-to-remove-png-requirement-ibv2x2
 fn ensure_fallback_icon_png(icons_dir: &PathBuf) {
     let icon_path = icons_dir.join("icon.png");
     if icon_path.exists() {
@@ -20,18 +19,10 @@ fn ensure_fallback_icon_png(icons_dir: &PathBuf) {
 
 fn ensure_fallback_icon_ico(icons_dir: &PathBuf) {
     let icon_path = icons_dir.join("icon.ico");
-=======
-
-fn ensure_fallback_icon() {
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let icon_path = manifest_dir.join("icons").join("icon.png");
-
->>>>>>> main
     if icon_path.exists() {
         return;
     }
 
-<<<<<<< codex/fix-app-build-to-remove-png-requirement-ibv2x2
     let png_len = FALLBACK_ICON_PNG.len() as u32;
     let png_offset = 6u32 + 16u32;
 
@@ -68,16 +59,5 @@ fn ensure_fallback_icons() {
 
 fn main() {
     ensure_fallback_icons();
-=======
-    if let Some(parent) = icon_path.parent() {
-        fs::create_dir_all(parent).expect("failed to create icons directory");
-    }
-
-    fs::write(&icon_path, FALLBACK_ICON_PNG).expect("failed to write fallback icon");
-}
-
-fn main() {
-    ensure_fallback_icon();
->>>>>>> main
     tauri_build::build()
 }
