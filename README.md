@@ -9,9 +9,11 @@ Diff is a lightweight writing application that feels like a minimal word process
 - Project folder creation in `~/Diff/<project-id>` with `document.md`, `document.comments.json`, and a hidden Git repo.
 - Autosave to `document.md` after inactivity.
 - Save Point creation through the Rust backend with `git2` commit creation.
+- Vertical savepoint rail with hover labels and selected-state emphasis.
 - Timeline loading from Git history with change-size metadata.
 - Document-at-save-point loading from commit tree.
-- Paragraph-level diff command with word-level refinement.
+- Side-by-side paragraph diff view with GitHub-inspired red/green word highlights.
+- Alternate diff views for focused changes and unified review.
 - Comment thread persistence in `document.comments.json`.
 - Basic merge import + conflict block generation.
 - Settings persistence in `~/.Diff/.diff-config.json`.
@@ -40,4 +42,4 @@ The workflow uploads build artifacts for each OS run.
 
 ## Notes
 
-The app now has working end-to-end local flows for core project/document/save point lifecycle, but rich TipTap editor UX and full production polish are still iterative improvements.
+The app now has working end-to-end local flows for the core project/document/save point lifecycle, plus a cleaner GitHub-style diff review surface. Rich TipTap editor UX and full production polish are still iterative improvements.

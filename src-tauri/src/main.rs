@@ -7,7 +7,7 @@
 //! command groups should move into modules (`projects`, `git_ops`, `comments`, etc.).
 
 use chrono::Utc;
-use git2::{DiffOptions, Oid, Repository, Signature};
+use git2::{Oid, Repository, Signature};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -270,6 +270,66 @@ fn tokenize_words(text: &str) -> Vec<String> {
     text.split_whitespace().map(ToString::to_string).collect()
 }
 
+fn normalize_words(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .map(|word| {
+            word.trim_matches(|ch: char| !ch.is_alphanumeric())
+                .to_lowercase()
+        })
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+fn paragraph_similarity(left: &str, right: &str) -> f32 {
+    let left_words = normalize_words(left);
+    let right_words = normalize_words(right);
+
+    if left_words.is_empty() && right_words.is_empty() {
+        return 1.0;
+    }
+
+    let mut left_counts = HashMap::new();
+    for word in left_words {
+        *left_counts.entry(word).or_insert(0usize) += 1;
+    }
+
+    let mut right_counts = HashMap::new();
+    for word in right_words {
+        *right_counts.entry(word).or_insert(0usize) += 1;
+    }
+
+    let mut overlap = 0usize;
+    let mut total = 0usize;
+
+    for (word, left_count) in &left_counts {
+        let right_count = right_counts.get(word).copied().unwrap_or(0);
+        overlap += (*left_count).min(right_count);
+        total += (*left_count).max(right_count);
+    }
+
+    for (word, right_count) in &right_counts {
+        if !left_counts.contains_key(word) {
+            total += *right_count;
+        }
+    }
+
+    if total == 0 {
+        0.0
+    } else {
+        overlap as f32 / total as f32
+    }
+}
+
+fn substitution_cost(left: &str, right: &str) -> usize {
+    if left == right {
+        0
+    } else if paragraph_similarity(left, right) >= 0.35 {
+        1
+    } else {
+        2
+    }
+}
+
 fn simple_word_diff(left: &str, right: &str) -> Vec<WordDiff> {
     let left_words = tokenize_words(left);
     let right_words = tokenize_words(right);
@@ -336,40 +396,148 @@ fn simple_word_diff(left: &str, right: &str) -> Vec<WordDiff> {
 fn simple_paragraph_diff(left: &str, right: &str) -> DiffResult {
     let left_blocks = split_blocks(left);
     let right_blocks = split_blocks(right);
-    let max_len = left_blocks.len().max(right_blocks.len());
     let mut blocks = Vec::new();
+    let n = left_blocks.len();
+    let m = right_blocks.len();
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
 
-    for idx in 0..max_len {
-        match (left_blocks.get(idx), right_blocks.get(idx)) {
-            (Some(l), Some(r)) if l == r => blocks.push(DiffBlock {
-                block_type: "unchanged".into(),
-                left_content: Some(l.clone()),
-                right_content: Some(r.clone()),
-                word_diffs: None,
-            }),
-            (Some(l), Some(r)) => blocks.push(DiffBlock {
-                block_type: "modified".into(),
-                left_content: Some(l.clone()),
-                right_content: Some(r.clone()),
-                word_diffs: Some(simple_word_diff(l, r)),
-            }),
-            (Some(l), None) => blocks.push(DiffBlock {
-                block_type: "deleted".into(),
-                left_content: Some(l.clone()),
-                right_content: None,
-                word_diffs: None,
-            }),
-            (None, Some(r)) => blocks.push(DiffBlock {
+    for i in (0..=n).rev() {
+        for j in (0..=m).rev() {
+            if i == n {
+                dp[i][j] = m.saturating_sub(j);
+                continue;
+            }
+            if j == m {
+                dp[i][j] = n.saturating_sub(i);
+                continue;
+            }
+
+            let replace_cost = substitution_cost(&left_blocks[i], &right_blocks[j]) + dp[i + 1][j + 1];
+            let delete_cost = 1 + dp[i + 1][j];
+            let insert_cost = 1 + dp[i][j + 1];
+
+            dp[i][j] = replace_cost.min(delete_cost).min(insert_cost);
+        }
+    }
+
+    let mut i = 0usize;
+    let mut j = 0usize;
+    while i < n || j < m {
+        if i == n {
+            blocks.push(DiffBlock {
                 block_type: "added".into(),
                 left_content: None,
-                right_content: Some(r.clone()),
+                right_content: Some(right_blocks[j].clone()),
                 word_diffs: None,
-            }),
-            (None, None) => {}
+            });
+            j += 1;
+            continue;
+        }
+
+        if j == m {
+            blocks.push(DiffBlock {
+                block_type: "deleted".into(),
+                left_content: Some(left_blocks[i].clone()),
+                right_content: None,
+                word_diffs: None,
+            });
+            i += 1;
+            continue;
+        }
+
+        if left_blocks[i] == right_blocks[j] && dp[i][j] == dp[i + 1][j + 1] {
+            blocks.push(DiffBlock {
+                block_type: "unchanged".into(),
+                left_content: Some(left_blocks[i].clone()),
+                right_content: Some(right_blocks[j].clone()),
+                word_diffs: None,
+            });
+            i += 1;
+            j += 1;
+            continue;
+        }
+
+        let replace_penalty = substitution_cost(&left_blocks[i], &right_blocks[j]);
+        let replace_cost = replace_penalty + dp[i + 1][j + 1];
+        let delete_cost = 1 + dp[i + 1][j];
+        let insert_cost = 1 + dp[i][j + 1];
+
+        if replace_penalty == 1 && dp[i][j] == replace_cost && replace_cost <= delete_cost && replace_cost <= insert_cost {
+            blocks.push(DiffBlock {
+                block_type: "modified".into(),
+                left_content: Some(left_blocks[i].clone()),
+                right_content: Some(right_blocks[j].clone()),
+                word_diffs: Some(simple_word_diff(&left_blocks[i], &right_blocks[j])),
+            });
+            i += 1;
+            j += 1;
+        } else if dp[i][j] == delete_cost && delete_cost <= insert_cost {
+            blocks.push(DiffBlock {
+                block_type: "deleted".into(),
+                left_content: Some(left_blocks[i].clone()),
+                right_content: None,
+                word_diffs: None,
+            });
+            i += 1;
+        } else {
+            blocks.push(DiffBlock {
+                block_type: "added".into(),
+                left_content: None,
+                right_content: Some(right_blocks[j].clone()),
+                word_diffs: None,
+            });
+            j += 1;
         }
     }
 
     DiffResult { blocks }
+}
+
+fn count_changed_words(diff: &DiffResult) -> ChangeStats {
+    let mut words_added = 0usize;
+    let mut words_deleted = 0usize;
+    let mut paragraphs_changed = 0usize;
+
+    for block in &diff.blocks {
+        match block.block_type.as_str() {
+            "unchanged" => {}
+            "added" => {
+                paragraphs_changed += 1;
+                words_added += block
+                    .right_content
+                    .as_deref()
+                    .map(count_words)
+                    .unwrap_or_default();
+            }
+            "deleted" => {
+                paragraphs_changed += 1;
+                words_deleted += block
+                    .left_content
+                    .as_deref()
+                    .map(count_words)
+                    .unwrap_or_default();
+            }
+            "modified" => {
+                paragraphs_changed += 1;
+                if let Some(word_diffs) = &block.word_diffs {
+                    for word_diff in word_diffs {
+                        match word_diff.diff_type.as_str() {
+                            "insert" => words_added += count_words(&word_diff.text),
+                            "delete" => words_deleted += count_words(&word_diff.text),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    ChangeStats {
+        words_added,
+        words_deleted,
+        paragraphs_changed,
+    }
 }
 
 // -----------------------------
@@ -623,27 +791,9 @@ fn get_change_stats(project_id: String, hash: String) -> Result<ChangeStats, Str
 
     let parent = commit.parent(0).map_err(|e| e.to_string())?;
     let parent_doc = read_commit_document(&repo, parent.id()).unwrap_or_default();
+    let diff = simple_paragraph_diff(markdown_body(&parent_doc), markdown_body(&current_doc));
 
-    let mut options = DiffOptions::new();
-    options.include_untracked(true);
-    let diff = repo
-        .diff_tree_to_tree(
-            Some(&parent.tree().map_err(|e| e.to_string())?),
-            Some(&commit.tree().map_err(|e| e.to_string())?),
-            Some(&mut options),
-        )
-        .map_err(|e| e.to_string())?;
-    let git_stats = diff.stats().map_err(|e| e.to_string())?;
-
-    Ok(ChangeStats {
-        words_added: count_words(markdown_body(&current_doc)).saturating_sub(count_words(markdown_body(&parent_doc)))
-            + git_stats.insertions() as usize,
-        words_deleted: count_words(markdown_body(&parent_doc)).saturating_sub(count_words(markdown_body(&current_doc)))
-            + git_stats.deletions() as usize,
-        paragraphs_changed: split_blocks(markdown_body(&current_doc))
-            .len()
-            .abs_diff(split_blocks(markdown_body(&parent_doc)).len()),
-    })
+    Ok(count_changed_words(&diff))
 }
 
 #[tauri::command]
@@ -829,7 +979,7 @@ fn apply_merge(project_id: String, resolutions: Vec<ConflictResolution>) -> Resu
 fn get_settings() -> Result<AppSettings, String> {
     ensure_app_ready()?;
     let raw = fs::read_to_string(app_config_path()).map_err(|e| e.to_string())?;
-    serde_json::from_str(&raw).map_err(|e| e.to_string())
+    serde_json::from_str(&raw).map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
