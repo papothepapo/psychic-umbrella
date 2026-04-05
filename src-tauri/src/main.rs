@@ -115,23 +115,77 @@ struct CommentsFile {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase", default)]
 struct AppSettings {
-    theme: String,
-    font: String,
-    font_size: u8,
-    line_height: f32,
-    editor_width: u16,
-    show_ruler: bool,
+    app_theme: String,
+    follow_system_theme: bool,
+    default_font: String,
+    default_font_size: u8,
+    default_line_spacing: String,
+    custom_line_spacing: f32,
+    default_text_alignment: String,
+    paragraph_spacing: u8,
+    default_page_width: String,
+    language: String,
+    spell_check: bool,
+    grammar_check: bool,
+    auto_correct: bool,
+    smart_quotes: bool,
+    auto_capitalize_sentences: bool,
     show_word_count: bool,
     show_character_count: bool,
+    show_paragraph_count: bool,
     show_reading_time: bool,
-    show_status_bar: bool,
-    show_spellcheck: bool,
+    show_word_goal: bool,
+    word_goal_target: u32,
+    word_goal_display: String,
     focus_mode: bool,
-    highlight_matches: bool,
+    typewriter_scrolling: bool,
+    show_formatting_marks: bool,
+    highlight_current_line: bool,
+    cursor_style: String,
+    cursor_blink: bool,
+    double_click_selects_word: bool,
+    triple_click_selects_paragraph: bool,
+    paste_plain_text_by_default: bool,
+    auto_snapshots_enabled: bool,
+    auto_snapshot_frequency: String,
+    auto_snapshot_custom_minutes: u16,
+    snapshot_only_when_changes_exist: bool,
+    auto_snapshot_naming: bool,
+    keep_snapshots_for: String,
+    custom_retention_days: u16,
+    maximum_snapshots_enabled: bool,
+    maximum_snapshots: u16,
+    snapshot_limit_behavior: String,
+    hidden_snapshot_hashes: Vec<String>,
+    canvas_width: String,
+    canvas_shadow: bool,
+    show_page_ruler: bool,
+    paragraph_indent_style: String,
+    deletion_color: String,
+    addition_color: String,
+    use_patterns_instead_of_color: bool,
+    diff_highlight_opacity: u8,
+    animation_speed: String,
+    reduce_motion: bool,
+    include_document_title_in_export: bool,
+    include_page_numbers_in_pdf: bool,
+    pdf_page_size: String,
+    pdf_margins: String,
+    include_author_name_in_export: bool,
+    author_name: String,
+    export_with_comparison_markup: bool,
+    import_mode: String,
+    font_scaling: u16,
+    high_contrast_mode: bool,
+    screen_reader_support: bool,
+    keyboard_navigation: bool,
+    tooltip_delay: u16,
+    focus_indicators: String,
+    dyslexia_friendly_font: bool,
+    line_focus_highlight: bool,
     projects_directory: String,
     backups_directory: String,
     exports_directory: String,
-    autosave_interval_ms: u64,
     backup_interval_ms: u64,
     default_export_format: String,
 }
@@ -139,23 +193,77 @@ struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
-            theme: "mist".into(),
-            font: "Lora".into(),
-            font_size: 18,
-            line_height: 1.8,
-            editor_width: 860,
-            show_ruler: true,
+            app_theme: "light".into(),
+            follow_system_theme: false,
+            default_font: "Georgia".into(),
+            default_font_size: 16,
+            default_line_spacing: "1.5".into(),
+            custom_line_spacing: 1.75,
+            default_text_alignment: "left".into(),
+            paragraph_spacing: 12,
+            default_page_width: "medium".into(),
+            language: "en-US".into(),
+            spell_check: true,
+            grammar_check: true,
+            auto_correct: true,
+            smart_quotes: true,
+            auto_capitalize_sentences: true,
             show_word_count: true,
-            show_character_count: true,
-            show_reading_time: true,
-            show_status_bar: true,
-            show_spellcheck: true,
+            show_character_count: false,
+            show_paragraph_count: false,
+            show_reading_time: false,
+            show_word_goal: false,
+            word_goal_target: 80_000,
+            word_goal_display: "fraction".into(),
             focus_mode: false,
-            highlight_matches: true,
+            typewriter_scrolling: false,
+            show_formatting_marks: false,
+            highlight_current_line: false,
+            cursor_style: "line".into(),
+            cursor_blink: true,
+            double_click_selects_word: true,
+            triple_click_selects_paragraph: true,
+            paste_plain_text_by_default: false,
+            auto_snapshots_enabled: true,
+            auto_snapshot_frequency: "15m".into(),
+            auto_snapshot_custom_minutes: 15,
+            snapshot_only_when_changes_exist: true,
+            auto_snapshot_naming: true,
+            keep_snapshots_for: "forever".into(),
+            custom_retention_days: 30,
+            maximum_snapshots_enabled: false,
+            maximum_snapshots: 100,
+            snapshot_limit_behavior: "deleteOldestAuto".into(),
+            hidden_snapshot_hashes: Vec::new(),
+            canvas_width: "medium".into(),
+            canvas_shadow: true,
+            show_page_ruler: false,
+            paragraph_indent_style: "block".into(),
+            deletion_color: "#DC2626".into(),
+            addition_color: "#16A34A".into(),
+            use_patterns_instead_of_color: false,
+            diff_highlight_opacity: 60,
+            animation_speed: "normal".into(),
+            reduce_motion: false,
+            include_document_title_in_export: true,
+            include_page_numbers_in_pdf: true,
+            pdf_page_size: "A4".into(),
+            pdf_margins: "normal".into(),
+            include_author_name_in_export: false,
+            author_name: String::new(),
+            export_with_comparison_markup: false,
+            import_mode: "newDocument".into(),
+            font_scaling: 100,
+            high_contrast_mode: false,
+            screen_reader_support: true,
+            keyboard_navigation: true,
+            tooltip_delay: 500,
+            focus_indicators: "default".into(),
+            dyslexia_friendly_font: false,
+            line_focus_highlight: false,
             projects_directory: app_root().to_string_lossy().to_string(),
             backups_directory: backups_root().to_string_lossy().to_string(),
             exports_directory: exports_root().to_string_lossy().to_string(),
-            autosave_interval_ms: 1500,
             backup_interval_ms: 300000,
             default_export_format: "inkline".into(),
         }
@@ -164,18 +272,108 @@ impl Default for AppSettings {
 
 impl AppSettings {
     fn normalized(mut self) -> Self {
-        if self.theme != "light" && self.theme != "mist" && self.theme != "system" {
-            self.theme = "mist".into();
+        if !matches!(self.app_theme.as_str(), "light" | "dark" | "sepia") {
+            self.app_theme = "light".into();
         }
 
-        if self.font.trim().is_empty() {
-            self.font = "Lora".into();
+        if self.default_font.trim().is_empty() {
+            self.default_font = "Georgia".into();
         }
 
-        self.font_size = self.font_size.clamp(14, 32);
-        self.editor_width = self.editor_width.clamp(640, 1100);
-        self.line_height = self.line_height.clamp(1.3, 2.4);
-        self.autosave_interval_ms = self.autosave_interval_ms.clamp(400, 30000);
+        if !matches!(
+            self.default_line_spacing.as_str(),
+            "single" | "1.15" | "1.5" | "double" | "custom"
+        ) {
+            self.default_line_spacing = "1.5".into();
+        }
+
+        if !matches!(
+            self.default_text_alignment.as_str(),
+            "left" | "center" | "right" | "justify"
+        ) {
+            self.default_text_alignment = "left".into();
+        }
+
+        if !matches!(
+            self.default_page_width.as_str(),
+            "narrow" | "medium" | "wide"
+        ) {
+            self.default_page_width = "medium".into();
+        }
+
+        if !matches!(
+            self.word_goal_display.as_str(),
+            "bar" | "percentage" | "fraction"
+        ) {
+            self.word_goal_display = "fraction".into();
+        }
+
+        if !matches!(self.cursor_style.as_str(), "line" | "block" | "underline") {
+            self.cursor_style = "line".into();
+        }
+
+        if !matches!(
+            self.auto_snapshot_frequency.as_str(),
+            "1m" | "5m" | "15m" | "30m" | "1h" | "custom"
+        ) {
+            self.auto_snapshot_frequency = "15m".into();
+        }
+
+        if !matches!(
+            self.keep_snapshots_for.as_str(),
+            "forever" | "7d" | "30d" | "90d" | "1y" | "custom"
+        ) {
+            self.keep_snapshots_for = "forever".into();
+        }
+
+        if !matches!(
+            self.snapshot_limit_behavior.as_str(),
+            "deleteOldestAuto" | "prompt"
+        ) {
+            self.snapshot_limit_behavior = "deleteOldestAuto".into();
+        }
+
+        if !matches!(self.canvas_width.as_str(), "narrow" | "medium" | "wide") {
+            self.canvas_width = "medium".into();
+        }
+
+        if !matches!(
+            self.paragraph_indent_style.as_str(),
+            "none" | "firstLine" | "block"
+        ) {
+            self.paragraph_indent_style = "block".into();
+        }
+
+        if !matches!(self.animation_speed.as_str(), "normal" | "slow" | "fast" | "off") {
+            self.animation_speed = "normal".into();
+        }
+
+        if !matches!(self.pdf_page_size.as_str(), "A4" | "Letter" | "A5") {
+            self.pdf_page_size = "A4".into();
+        }
+
+        if !matches!(self.pdf_margins.as_str(), "normal" | "narrow" | "wide") {
+            self.pdf_margins = "normal".into();
+        }
+
+        if !matches!(self.import_mode.as_str(), "newDocument" | "newSnapshot") {
+            self.import_mode = "newDocument".into();
+        }
+
+        if !matches!(self.focus_indicators.as_str(), "default" | "high" | "off") {
+            self.focus_indicators = "default".into();
+        }
+
+        self.default_font_size = self.default_font_size.clamp(8, 72);
+        self.custom_line_spacing = self.custom_line_spacing.clamp(1.0, 3.0);
+        self.paragraph_spacing = self.paragraph_spacing.clamp(0, 40);
+        self.word_goal_target = self.word_goal_target.clamp(1, 9_999_999);
+        self.auto_snapshot_custom_minutes = self.auto_snapshot_custom_minutes.clamp(1, 1440);
+        self.custom_retention_days = self.custom_retention_days.clamp(1, 3650);
+        self.maximum_snapshots = self.maximum_snapshots.clamp(1, 10_000);
+        self.diff_highlight_opacity = self.diff_highlight_opacity.clamp(0, 100);
+        self.font_scaling = self.font_scaling.clamp(80, 150);
+        self.tooltip_delay = self.tooltip_delay.clamp(0, 1000);
         self.backup_interval_ms = self.backup_interval_ms.clamp(1000, 86_400_000);
 
         if self.projects_directory.trim().is_empty() {
@@ -190,7 +388,7 @@ impl AppSettings {
 
         if !matches!(
             self.default_export_format.as_str(),
-            "md" | "txt" | "inkline" | "docx"
+            "pdf" | "md" | "txt" | "inkline" | "docx"
         ) {
             self.default_export_format = "inkline".into();
         }
