@@ -70,9 +70,12 @@ export interface ConflictResolution {
 }
 
 export interface AppSettings {
-  theme: 'light' | 'dark' | 'system';
+  theme: 'light' | 'mist' | 'system';
   font: string;
   fontSize: number;
+  lineHeight: number;
+  editorWidth: number;
+  showRuler: boolean;
   projectsDirectory: string;
   autosaveIntervalMs: number;
 }

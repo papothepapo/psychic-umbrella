@@ -1,22 +1,22 @@
-# Diff
+# Inkline
 
-Diff is a lightweight writing application that feels like a minimal word processor while storing version history in Git transparently.
+Inkline is a writing studio that keeps the drafting surface calm while making snapshot comparison a first-class part of the workflow.
 
 ## What is currently implemented
 
 - Cross-platform scaffold using Tauri v2 + React + TypeScript.
 - Project creation/listing/renaming/deletion backed by SQLite index (`rusqlite`).
-- Project folder creation in `~/Diff/<project-id>` with `document.md`, `document.comments.json`, and a hidden Git repo.
+- Project folder creation in `~/Inkline/<project-id>` with `document.md`, `document.comments.json`, and a hidden Git repo.
 - Autosave to `document.md` after inactivity.
 - Save Point creation through the Rust backend with `git2` commit creation.
-- Vertical savepoint rail with hover labels and selected-state emphasis.
+- Dual snapshot timelines for left/right comparison selection.
 - Timeline loading from Git history with change-size metadata.
 - Document-at-save-point loading from commit tree.
-- Side-by-side paragraph diff view with GitHub-inspired red/green word highlights.
-- Alternate diff views for focused changes and unified review.
+- Side-by-side and unified Changes views with paragraph and line-based comparison modes.
+- Writer-facing ribbon controls for fonts, spacing, page width, and inline formatting helpers.
 - Comment thread persistence in `document.comments.json`.
 - Basic merge import + conflict block generation.
-- Settings persistence in `~/.Diff/.diff-config.json`.
+- Settings persistence in `~/Inkline/.inkline-config.json` with legacy Diff paths migrated forward when present.
 
 ## Development
 
@@ -42,4 +42,4 @@ The workflow uploads build artifacts for each OS run.
 
 ## Notes
 
-The app now has working end-to-end local flows for the core project/document/save point lifecycle, plus a cleaner GitHub-style diff review surface. Rich TipTap editor UX and full production polish are still iterative improvements.
+The app now supports the core project/document/snapshot lifecycle plus a more complete writer-facing interface. Rich text rendering is still markdown-style rather than true WYSIWYG, but the editor, comparison, onboarding, and preferences flows are in place.

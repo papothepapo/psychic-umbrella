@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! Diff backend (Tauri commands)
+//! Inkline backend (Tauri commands)
 //! ---------------------------------
 //! This file intentionally keeps most of the application backend in one place for
 //! readability while the project is still early-stage. As the codebase grows,
@@ -96,13 +96,31 @@ struct CommentsFile {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 struct AppSettings {
     theme: String,
     font: String,
     font_size: u8,
+    line_height: f32,
+    editor_width: u16,
+    show_ruler: bool,
     projects_directory: String,
     autosave_interval_ms: u64,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        AppSettings {
+            theme: "mist".into(),
+            font: "Lora".into(),
+            font_size: 18,
+            line_height: 1.8,
+            editor_width: 820,
+            show_ruler: true,
+            projects_directory: app_root().to_string_lossy().to_string(),
+            autosave_interval_ms: 2000,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -140,12 +158,41 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
 }
 
-fn app_root() -> PathBuf {
+fn preferred_app_root() -> PathBuf {
+    home_dir().join("Inkline")
+}
+
+fn legacy_app_root() -> PathBuf {
     home_dir().join("Diff")
 }
 
+fn app_root() -> PathBuf {
+    let preferred = preferred_app_root();
+    if preferred.exists() {
+        preferred
+    } else {
+        let legacy = legacy_app_root();
+        if legacy.exists() {
+            legacy
+        } else {
+            preferred
+        }
+    }
+}
+
 fn app_config_path() -> PathBuf {
-    app_root().join(".diff-config.json")
+    let root = app_root();
+    let preferred = root.join(".inkline-config.json");
+    if preferred.exists() {
+        preferred
+    } else {
+        let legacy = root.join(".diff-config.json");
+        if legacy.exists() {
+            legacy
+        } else {
+            preferred
+        }
+    }
 }
 
 fn app_db_path() -> PathBuf {
@@ -165,7 +212,20 @@ fn comments_path(project_id: &str) -> PathBuf {
 }
 
 fn ensure_app_ready() -> Result<(), String> {
+    let preferred_root = preferred_app_root();
+    let legacy_root = legacy_app_root();
+    if !preferred_root.exists() && legacy_root.exists() {
+        let _ = fs::rename(&legacy_root, &preferred_root);
+    }
+
     fs::create_dir_all(app_root()).map_err(|e| e.to_string())?;
+
+    let legacy_config = app_root().join(".diff-config.json");
+    let preferred_config = app_root().join(".inkline-config.json");
+    if !preferred_config.exists() && legacy_config.exists() {
+        let _ = fs::rename(&legacy_config, &preferred_config);
+    }
+
     let conn = Connection::open(app_db_path()).map_err(|e| e.to_string())?;
 
     // Single table index for lightweight project metadata listing and search.
@@ -185,13 +245,7 @@ fn ensure_app_ready() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
 
     if !app_config_path().exists() {
-        let settings = AppSettings {
-            theme: "system".into(),
-            font: "Lora".into(),
-            font_size: 18,
-            projects_directory: app_root().to_string_lossy().to_string(),
-            autosave_interval_ms: 2000,
-        };
+        let settings = AppSettings::default();
         let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
         fs::write(app_config_path(), json).map_err(|e| e.to_string())?;
     }
@@ -568,7 +622,7 @@ fn create_project(title: String) -> Result<ProjectMeta, String> {
         .map_err(|e| e.to_string())?;
     let tree_id = index.write_tree().map_err(|e| e.to_string())?;
     let tree = repo.find_tree(tree_id).map_err(|e| e.to_string())?;
-    let sig = Signature::now("Diff", "noreply@diff.app").map_err(|e| e.to_string())?;
+    let sig = Signature::now("Inkline", "noreply@inkline.app").map_err(|e| e.to_string())?;
     repo.commit(Some("HEAD"), &sig, &sig, "Project initialized", &tree, &[])
         .map_err(|e| e.to_string())?;
 
@@ -703,7 +757,7 @@ fn create_save_point(project_id: String, message: String) -> Result<SavePoint, S
     let tree_id = index.write_tree().map_err(|e| e.to_string())?;
     index.write().map_err(|e| e.to_string())?;
     let tree = repo.find_tree(tree_id).map_err(|e| e.to_string())?;
-    let sig = Signature::now("Diff", "noreply@diff.app").map_err(|e| e.to_string())?;
+    let sig = Signature::now("Inkline", "noreply@inkline.app").map_err(|e| e.to_string())?;
 
     let save_point_message = if message.trim().is_empty() {
         format!("Save point at {}", Utc::now().format("%-I:%M %p"))
