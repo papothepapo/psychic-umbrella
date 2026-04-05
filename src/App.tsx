@@ -1,50 +1,64 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './lib/api';
-import type { AppSettings, DiffBlock, DiffResult, ProjectMeta, SavePoint, WordDiff } from './lib/types';
+import type {
+  AppSettings,
+  BackupEntry,
+  DiffBlock,
+  DiffResult,
+  ExportFormat,
+  ProjectMeta,
+  SavePoint,
+  StorageOverview,
+  WordDiff
+} from './lib/types';
 
-type DiffViewMode = 'split' | 'unified';
-type DiffGranularity = 'paragraphs' | 'lines';
-type DiffTone = 'classic' | 'ink' | 'warm';
 type CompareRef = 'current' | string;
-
+type DiffGranularity = 'paragraphs' | 'lines';
 type ParsedDocument = {
   meta: Record<string, string>;
   body: string;
 };
 
 const BRAND_NAME = 'Inkline';
-const WALKTHROUGH_KEY = 'inkline-walkthrough-v1';
+const ACTIVE_PROJECT_KEY = 'inkline-active-project';
 const EMPTY_DIFF: DiffResult = { blocks: [] };
 
 const FONT_OPTIONS = [
-  { value: 'Lora', label: 'Lora' },
-  { value: 'Source Serif 4', label: 'Source Serif 4' },
-  { value: 'Fraunces', label: 'Fraunces' },
-  { value: 'IBM Plex Serif', label: 'IBM Plex Serif' }
+  'Lora',
+  'Source Serif 4',
+  'IBM Plex Serif',
+  'Fraunces',
+  'Newsreader',
+  'Libre Baskerville'
 ];
 
-const FONT_SIZE_OPTIONS = [16, 17, 18, 20, 22, 24];
-const LINE_HEIGHT_OPTIONS = [1.5, 1.65, 1.8, 1.95, 2.1];
-const WIDTH_OPTIONS = [
-  { value: 700, label: 'Narrow' },
-  { value: 820, label: 'Standard' },
-  { value: 940, label: 'Wide' }
-];
-const AUTOSAVE_OPTIONS = [
-  { value: 1000, label: '1s' },
-  { value: 2000, label: '2s' },
-  { value: 5000, label: '5s' }
-];
+const FONT_SIZE_OPTIONS = [16, 18, 20, 22, 24, 26, 28];
+const LINE_HEIGHT_OPTIONS = [1.45, 1.6, 1.75, 1.9, 2.05];
+const WIDTH_OPTIONS = [720, 820, 900, 980, 1080];
+const AUTOSAVE_OPTIONS = [500, 1000, 1500, 3000, 5000];
+const BACKUP_OPTIONS = [60000, 300000, 900000, 1800000];
+const EXPORT_OPTIONS: ExportFormat[] = ['inkline', 'docx', 'md', 'txt'];
 
-const SETTINGS_DEFAULTS: AppSettings = {
+const DEFAULT_SETTINGS: AppSettings = {
   theme: 'mist',
   font: 'Lora',
   fontSize: 18,
   lineHeight: 1.8,
-  editorWidth: 820,
+  editorWidth: 860,
   showRuler: true,
+  showWordCount: true,
+  showCharacterCount: true,
+  showReadingTime: true,
+  showStatusBar: true,
+  showSpellcheck: true,
+  focusMode: false,
+  highlightMatches: true,
   projectsDirectory: '',
-  autosaveIntervalMs: 2000
+  backupsDirectory: '',
+  exportsDirectory: '',
+  autosaveIntervalMs: 1500,
+  backupIntervalMs: 300000,
+  defaultExportFormat: 'inkline'
 };
 
 function formatTimestamp(timestamp: string) {
@@ -61,31 +75,65 @@ function formatTimestamp(timestamp: string) {
   }).format(parsed);
 }
 
-function getLatestSavePoint(savePoints: SavePoint[]) {
-  return savePoints[savePoints.length - 1] ?? null;
-}
-
 function countWords(text: string) {
   const trimmed = text.trim();
   return trimmed ? trimmed.split(/\s+/).length : 0;
 }
 
+function countCharacters(text: string) {
+  return text.length;
+}
+
+function readingTimeLabel(words: number) {
+  if (!words) return '0 min read';
+  return `${Math.max(1, Math.round(words / 200))} min read`;
+}
+
 function normalizeSettings(settings?: Partial<AppSettings> | null): AppSettings {
   return {
-    ...SETTINGS_DEFAULTS,
+    ...DEFAULT_SETTINGS,
     ...settings,
     theme:
       settings?.theme === 'light' || settings?.theme === 'mist' || settings?.theme === 'system'
         ? settings.theme
-        : SETTINGS_DEFAULTS.theme,
-    font: settings?.font || SETTINGS_DEFAULTS.font,
-    fontSize: Number(settings?.fontSize ?? SETTINGS_DEFAULTS.fontSize),
-    lineHeight: Number(settings?.lineHeight ?? SETTINGS_DEFAULTS.lineHeight),
-    editorWidth: Number(settings?.editorWidth ?? SETTINGS_DEFAULTS.editorWidth),
-    showRuler: settings?.showRuler ?? SETTINGS_DEFAULTS.showRuler,
-    autosaveIntervalMs: Number(settings?.autosaveIntervalMs ?? SETTINGS_DEFAULTS.autosaveIntervalMs),
-    projectsDirectory: settings?.projectsDirectory || SETTINGS_DEFAULTS.projectsDirectory
+        : DEFAULT_SETTINGS.theme,
+    font: settings?.font || DEFAULT_SETTINGS.font,
+    fontSize: Number(settings?.fontSize ?? DEFAULT_SETTINGS.fontSize),
+    lineHeight: Number(settings?.lineHeight ?? DEFAULT_SETTINGS.lineHeight),
+    editorWidth: Number(settings?.editorWidth ?? DEFAULT_SETTINGS.editorWidth),
+    showRuler: settings?.showRuler ?? DEFAULT_SETTINGS.showRuler,
+    showWordCount: settings?.showWordCount ?? DEFAULT_SETTINGS.showWordCount,
+    showCharacterCount: settings?.showCharacterCount ?? DEFAULT_SETTINGS.showCharacterCount,
+    showReadingTime: settings?.showReadingTime ?? DEFAULT_SETTINGS.showReadingTime,
+    showStatusBar: settings?.showStatusBar ?? DEFAULT_SETTINGS.showStatusBar,
+    showSpellcheck: settings?.showSpellcheck ?? DEFAULT_SETTINGS.showSpellcheck,
+    focusMode: settings?.focusMode ?? DEFAULT_SETTINGS.focusMode,
+    highlightMatches: settings?.highlightMatches ?? DEFAULT_SETTINGS.highlightMatches,
+    projectsDirectory: settings?.projectsDirectory || DEFAULT_SETTINGS.projectsDirectory,
+    backupsDirectory: settings?.backupsDirectory || DEFAULT_SETTINGS.backupsDirectory,
+    exportsDirectory: settings?.exportsDirectory || DEFAULT_SETTINGS.exportsDirectory,
+    autosaveIntervalMs: Number(settings?.autosaveIntervalMs ?? DEFAULT_SETTINGS.autosaveIntervalMs),
+    backupIntervalMs: Number(settings?.backupIntervalMs ?? DEFAULT_SETTINGS.backupIntervalMs),
+    defaultExportFormat:
+      settings?.defaultExportFormat === 'md' ||
+      settings?.defaultExportFormat === 'txt' ||
+      settings?.defaultExportFormat === 'docx' ||
+      settings?.defaultExportFormat === 'inkline'
+        ? settings.defaultExportFormat
+        : DEFAULT_SETTINGS.defaultExportFormat
   };
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = '';
+  const chunkSize = 0x8000;
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+
+  return window.btoa(binary);
 }
 
 function parseDocument(raw: string): ParsedDocument {
@@ -104,14 +152,8 @@ function parseDocument(raw: string): ParsedDocument {
   for (const line of frontmatter) {
     const separator = line.indexOf(':');
     if (separator === -1) continue;
-
     const key = line.slice(0, separator).trim();
-    let value = line.slice(separator + 1).trim();
-
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-
+    const value = line.slice(separator + 1).trim().replace(/^['"]|['"]$/g, '');
     meta[key] = value;
   }
 
@@ -122,7 +164,7 @@ function parseDocument(raw: string): ParsedDocument {
 }
 
 function formatFrontmatterValue(value: string) {
-  if (/^[A-Za-z0-9._:/-]+$/.test(value)) {
+  if (/^[A-Za-z0-9._:/+-]+$/.test(value)) {
     return value;
   }
 
@@ -136,20 +178,34 @@ function composeDocument(meta: Record<string, string>, title: string, body: stri
     modified: new Date().toISOString()
   };
 
+  if (!nextMeta.created) {
+    nextMeta.created = new Date().toISOString();
+  }
+
   const orderedKeys = ['title', 'created', 'modified', 'id'];
   const keys = [
     ...orderedKeys.filter((key) => key in nextMeta),
     ...Object.keys(nextMeta).filter((key) => !orderedKeys.includes(key))
   ];
 
-  if (keys.length === 0) {
-    return body;
+  const frontmatter = keys.map((key) => `${key}: ${formatFrontmatterValue(nextMeta[key])}`).join('\n');
+  return `---\n${frontmatter}\n---\n\n${body.replace(/^\n+/, '')}`;
+}
+
+function splitIntoUnits(text: string, granularity: DiffGranularity) {
+  const normalized = text.replace(/\r\n/g, '\n');
+  if (!normalized.trim()) {
+    return [];
   }
 
-  const frontmatter = keys.map((key) => `${key}: ${formatFrontmatterValue(nextMeta[key])}`).join('\n');
-  const normalizedBody = body.replace(/^\n+/, '');
+  if (granularity === 'lines') {
+    return normalized.split('\n');
+  }
 
-  return `---\n${frontmatter}\n---\n\n${normalizedBody}`;
+  return normalized
+    .split(/\n\s*\n/g)
+    .map((block) => block.trim())
+    .filter(Boolean);
 }
 
 function normalizeTokens(text: string) {
@@ -246,22 +302,6 @@ function simpleWordDiff(left: string, right: string): WordDiff[] {
   return output;
 }
 
-function splitIntoUnits(text: string, granularity: DiffGranularity) {
-  const normalized = text.replace(/\r\n/g, '\n');
-  if (!normalized.trim()) {
-    return [];
-  }
-
-  if (granularity === 'lines') {
-    return normalized.split('\n');
-  }
-
-  return normalized
-    .split(/\n\s*\n/g)
-    .map((block) => block.trim())
-    .filter(Boolean);
-}
-
 function buildDiff(leftText: string, rightText: string, granularity: DiffGranularity): DiffResult {
   const leftBlocks = splitIntoUnits(leftText, granularity);
   const rightBlocks = splitIntoUnits(rightText, granularity);
@@ -275,7 +315,6 @@ function buildDiff(leftText: string, rightText: string, granularity: DiffGranula
         dp[i][j] = m - j;
         continue;
       }
-
       if (j === m) {
         dp[i][j] = n - i;
         continue;
@@ -294,13 +333,13 @@ function buildDiff(leftText: string, rightText: string, granularity: DiffGranula
 
   while (i < n || j < m) {
     if (i === n) {
-      blocks.push({ type: 'added', leftContent: undefined, rightContent: rightBlocks[j], wordDiffs: undefined });
+      blocks.push({ type: 'added', rightContent: rightBlocks[j] });
       j += 1;
       continue;
     }
 
     if (j === m) {
-      blocks.push({ type: 'deleted', leftContent: leftBlocks[i], rightContent: undefined, wordDiffs: undefined });
+      blocks.push({ type: 'deleted', leftContent: leftBlocks[i] });
       i += 1;
       continue;
     }
@@ -309,8 +348,7 @@ function buildDiff(leftText: string, rightText: string, granularity: DiffGranula
       blocks.push({
         type: 'unchanged',
         leftContent: leftBlocks[i],
-        rightContent: rightBlocks[j],
-        wordDiffs: undefined
+        rightContent: rightBlocks[j]
       });
       i += 1;
       j += 1;
@@ -332,10 +370,10 @@ function buildDiff(leftText: string, rightText: string, granularity: DiffGranula
       i += 1;
       j += 1;
     } else if (dp[i][j] === deleteCost && deleteCost <= insertCost) {
-      blocks.push({ type: 'deleted', leftContent: leftBlocks[i], rightContent: undefined, wordDiffs: undefined });
+      blocks.push({ type: 'deleted', leftContent: leftBlocks[i] });
       i += 1;
     } else {
-      blocks.push({ type: 'added', leftContent: undefined, rightContent: rightBlocks[j], wordDiffs: undefined });
+      blocks.push({ type: 'added', rightContent: rightBlocks[j] });
       j += 1;
     }
   }
@@ -355,34 +393,16 @@ function summarizeDiff(diff: DiffResult) {
   );
 }
 
-function sourceLabel(reference: CompareRef, timeline: SavePoint[]) {
-  if (reference === 'current') {
-    return 'Current draft';
-  }
-
-  return timeline.find((point) => point.hash === reference)?.message || 'Snapshot';
-}
-
-function sourceTimestamp(reference: CompareRef, timeline: SavePoint[]) {
-  if (reference === 'current') {
-    return 'Live manuscript';
-  }
-
-  const match = timeline.find((point) => point.hash === reference);
-  return match ? formatTimestamp(match.timestamp) : 'Saved snapshot';
-}
-
 function renderWordDiff(wordDiffs: WordDiff[], side: 'left' | 'right') {
   return wordDiffs.map((wordDiff, index) => {
     const hidden =
-      (side === 'left' && wordDiff.type === 'insert') ||
-      (side === 'right' && wordDiff.type === 'delete');
+      (side === 'left' && wordDiff.type === 'insert') || (side === 'right' && wordDiff.type === 'delete');
 
     if (hidden) {
       return null;
     }
 
-    const tokenClass =
+    const className =
       wordDiff.type === 'insert'
         ? 'diff-token token-insert'
         : wordDiff.type === 'delete'
@@ -390,7 +410,7 @@ function renderWordDiff(wordDiffs: WordDiff[], side: 'left' | 'right') {
           : 'diff-token token-equal';
 
     return (
-      <span key={`${side}-${wordDiff.type}-${index}`} className={tokenClass}>
+      <span key={`${side}-${wordDiff.type}-${index}`} className={className}>
         {wordDiff.text}
       </span>
     );
@@ -410,89 +430,65 @@ function renderDiffSide(block: DiffBlock, side: 'left' | 'right') {
   return <span className="diff-copy">{content}</span>;
 }
 
-type CompareTimelineProps = {
-  label: string;
-  description: string;
-  selectedRef: CompareRef;
-  timeline: SavePoint[];
-  onSelect: (reference: CompareRef) => void;
-};
-
-function CompareTimeline({ label, description, selectedRef, timeline, onSelect }: CompareTimelineProps) {
-  const reversed = [...timeline].reverse();
-
-  return (
-    <section className="compare-track">
-      <div className="compare-track-header">
-        <span className="ribbon-caption">{label}</span>
-        <p>{description}</p>
-      </div>
-
-      <div className="compare-options">
-        <button
-          className={`compare-node ${selectedRef === 'current' ? 'selected' : ''}`}
-          onClick={() => onSelect('current')}
-          title="Compare against the current live draft"
-        >
-          <span className="compare-node-dot current" aria-hidden="true" />
-          <div>
-            <strong>Current draft</strong>
-            <small>Live manuscript</small>
-          </div>
-        </button>
-
-        {reversed.map((point) => (
-          <button
-            key={point.hash}
-            className={`compare-node ${selectedRef === point.hash ? 'selected' : ''}`}
-            onClick={() => onSelect(point.hash)}
-            title={`${point.message} • ${formatTimestamp(point.timestamp)}`}
-          >
-            <span className="compare-node-dot" aria-hidden="true" />
-            <div>
-              <strong>{point.message || 'Untitled snapshot'}</strong>
-              <small>
-                {formatTimestamp(point.timestamp)} · {point.changeSize} changed words
-              </small>
-            </div>
-          </button>
-        ))}
-      </div>
-    </section>
-  );
+function projectById(projects: ProjectMeta[], projectId: string | null) {
+  return projects.find((project) => project.id === projectId) ?? null;
 }
 
 export function App() {
   const [projects, setProjects] = useState<ProjectMeta[]>([]);
-  const [activeProject, setActiveProject] = useState<ProjectMeta | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [documentMeta, setDocumentMeta] = useState<Record<string, string>>({});
   const [body, setBody] = useState('');
   const [timeline, setTimeline] = useState<SavePoint[]>([]);
-  const [compareLeftRef, setCompareLeftRef] = useState<CompareRef>('current');
-  const [compareRightRef, setCompareRightRef] = useState<CompareRef>('current');
-  const [diffResult, setDiffResult] = useState<DiffResult>(EMPTY_DIFF);
-  const [diffViewMode, setDiffViewMode] = useState<DiffViewMode>('split');
-  const [diffGranularity, setDiffGranularity] = useState<DiffGranularity>('paragraphs');
-  const [diffTone, setDiffTone] = useState<DiffTone>('classic');
-  const [showUnchanged, setShowUnchanged] = useState(true);
-  const [showCompareSources, setShowCompareSources] = useState(true);
-  const [showChanges, setShowChanges] = useState(true);
-  const [showSavePointModal, setShowSavePointModal] = useState(false);
-  const [showStudio, setShowStudio] = useState(false);
-  const [showWalkthrough, setShowWalkthrough] = useState(false);
-  const [saveMessage, setSaveMessage] = useState('');
-  const [settings, setSettings] = useState<AppSettings>(SETTINGS_DEFAULTS);
+  const [backups, setBackups] = useState<BackupEntry[]>([]);
+  const [storage, setStorage] = useState<StorageOverview | null>(null);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
-  const [isCreatingSavePoint, setIsCreatingSavePoint] = useState(false);
-  const [isDiffLoading, setIsDiffLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [changesOpen, setChangesOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [compareRef, setCompareRef] = useState<CompareRef>('current');
+  const [diffGranularity, setDiffGranularity] = useState<DiffGranularity>('paragraphs');
+  const [showUnchanged, setShowUnchanged] = useState(false);
+  const [diffResult, setDiffResult] = useState<DiffResult>(EMPTY_DIFF);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const documentCacheRef = useRef<Record<string, string>>({});
   const lastSavedDocumentRef = useRef('');
   const lastSavedSettingsRef = useRef('');
   const lastRenamedTitleRef = useRef('');
-  const settingsReadyRef = useRef(false);
+
+  const activeProject = useMemo(() => projectById(projects, activeProjectId), [projects, activeProjectId]);
+  const wordCount = useMemo(() => countWords(body), [body]);
+  const characterCount = useMemo(() => countCharacters(body), [body]);
+  const diffSummary = useMemo(() => summarizeDiff(diffResult), [diffResult]);
+  const visibleDiffBlocks = useMemo(
+    () => (showUnchanged ? diffResult.blocks : diffResult.blocks.filter((block) => block.type !== 'unchanged')),
+    [diffResult.blocks, showUnchanged]
+  );
+  const searchMatches = useMemo(() => {
+    const query = findQuery.trim().toLowerCase();
+    if (!query) return [];
+
+    const matches: Array<{ start: number; end: number }> = [];
+    const haystack = body.toLowerCase();
+    let index = 0;
+
+    while (index < haystack.length) {
+      const found = haystack.indexOf(query, index);
+      if (found === -1) break;
+      matches.push({ start: found, end: found + query.length });
+      index = found + query.length;
+    }
+
+    return matches;
+  }, [body, findQuery]);
 
   useEffect(() => {
     let cancelled = false;
@@ -500,9 +496,10 @@ export function App() {
     void (async () => {
       try {
         setLoading(true);
-        const [projectList, storedSettings] = await Promise.all([
+        const [projectList, storedSettings, storageOverview] = await Promise.all([
           api.listProjects(),
-          api.getSettings().catch(() => SETTINGS_DEFAULTS)
+          api.getSettings().catch(() => DEFAULT_SETTINGS),
+          api.getStorageOverview().catch(() => null)
         ]);
 
         if (cancelled) return;
@@ -510,12 +507,14 @@ export function App() {
         const nextSettings = normalizeSettings(storedSettings);
         setProjects(projectList);
         setSettings(nextSettings);
+        setStorage(storageOverview);
         lastSavedSettingsRef.current = JSON.stringify(nextSettings);
-        settingsReadyRef.current = true;
-        setShowWalkthrough(window.localStorage.getItem(WALKTHROUGH_KEY) !== 'done');
 
-        if (projectList.length > 0) {
-          await openProject(projectList[0]);
+        const rememberedProjectId = window.localStorage.getItem(ACTIVE_PROJECT_KEY);
+        const initialProject = projectById(projectList, rememberedProjectId) ?? projectList[0] ?? null;
+
+        if (initialProject) {
+          await openProject(initialProject, true);
         }
       } catch (err) {
         if (!cancelled) {
@@ -542,51 +541,13 @@ export function App() {
     }
 
     const timer = window.setTimeout(() => {
-      void api
-        .saveDocument(activeProject.id, nextDocument)
-        .then(() => {
-          lastSavedDocumentRef.current = nextDocument;
-          setProjects((prev) =>
-            prev.map((project) =>
-              project.id === activeProject.id ? { ...project, modified: new Date().toISOString() } : project
-            )
-          );
-        })
-        .catch((err) => {
-          setError(`Autosave failed: ${String(err)}`);
-        });
+      void flushDocumentSave(activeProject);
     }, settings.autosaveIntervalMs);
 
     return () => window.clearTimeout(timer);
   }, [activeProject, body, documentMeta, settings.autosaveIntervalMs, title]);
 
   useEffect(() => {
-    if (!activeProject) return;
-
-    const trimmedTitle = title.trim();
-    if (!trimmedTitle || trimmedTitle === lastRenamedTitleRef.current) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      void api
-        .renameProject(activeProject.id, trimmedTitle)
-        .then(() => {
-          lastRenamedTitleRef.current = trimmedTitle;
-          setActiveProject((prev) => (prev ? { ...prev, title: trimmedTitle } : prev));
-          setProjects((prev) =>
-            prev.map((project) => (project.id === activeProject.id ? { ...project, title: trimmedTitle } : project))
-          );
-        })
-        .catch((err) => setError(`Rename failed: ${String(err)}`));
-    }, 350);
-
-    return () => window.clearTimeout(timer);
-  }, [activeProject, title]);
-
-  useEffect(() => {
-    if (!activeProject || !settingsReadyRef.current) return;
-
     const serialized = JSON.stringify(settings);
     if (serialized === lastSavedSettingsRef.current) {
       return;
@@ -598,30 +559,55 @@ export function App() {
         .then(() => {
           lastSavedSettingsRef.current = serialized;
         })
-        .catch((err) => setError(`Settings sync failed: ${String(err)}`));
+        .catch((err) => {
+          setError(`Settings sync failed: ${String(err)}`);
+        });
     }, 250);
 
     return () => window.clearTimeout(timer);
-  }, [activeProject, settings]);
+  }, [settings]);
 
   useEffect(() => {
-    if (!activeProject || !showChanges) return;
+    if (!activeProject) return;
+
+    const trimmedTitle = title.trim() || 'Untitled Project';
+    if (trimmedTitle === lastRenamedTitleRef.current) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void api
+        .renameProject(activeProject.id, trimmedTitle)
+        .then(() => {
+          lastRenamedTitleRef.current = trimmedTitle;
+          setProjects((prev) =>
+            prev.map((project) =>
+              project.id === activeProject.id ? { ...project, title: trimmedTitle, modified: new Date().toISOString() } : project
+            )
+          );
+        })
+        .catch((err) => {
+          setError(`Rename failed: ${String(err)}`);
+        });
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [activeProject, title]);
+
+  useEffect(() => {
+    if (!changesOpen || !activeProject || compareRef === 'current') {
+      setDiffResult(EMPTY_DIFF);
+      return;
+    }
 
     let cancelled = false;
 
     void (async () => {
       try {
-        setIsDiffLoading(true);
-
-        const [leftBody, rightBody] = await Promise.all([
-          loadSourceBody(activeProject.id, compareLeftRef),
-          loadSourceBody(activeProject.id, compareRightRef)
-        ]);
-
+        setDiffLoading(true);
+        const previousDocument = await loadSourceBody(activeProject.id, compareRef);
         if (cancelled) return;
-
-        setDiffResult(buildDiff(leftBody, rightBody, diffGranularity));
-        setError(null);
+        setDiffResult(buildDiff(previousDocument, body, diffGranularity));
       } catch (err) {
         if (!cancelled) {
           setError(`Changes view failed: ${String(err)}`);
@@ -629,7 +615,7 @@ export function App() {
         }
       } finally {
         if (!cancelled) {
-          setIsDiffLoading(false);
+          setDiffLoading(false);
         }
       }
     })();
@@ -637,7 +623,11 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeProject, body, compareLeftRef, compareRightRef, diffGranularity, showChanges]);
+  }, [activeProject, body, changesOpen, compareRef, diffGranularity]);
+
+  useEffect(() => {
+    setActiveMatchIndex(0);
+  }, [findQuery]);
 
   async function loadSourceBody(projectId: string, reference: CompareRef) {
     if (reference === 'current') {
@@ -654,28 +644,61 @@ export function App() {
     return parsed.body;
   }
 
-  async function openProject(project: ProjectMeta) {
+  async function flushDocumentSave(project: ProjectMeta | null) {
+    if (!project) return;
+
+    const nextDocument = composeDocument(documentMeta, title, body);
+    if (nextDocument === lastSavedDocumentRef.current) {
+      return;
+    }
+
     try {
+      setSaveState('saving');
+      await api.saveDocument(project.id, nextDocument);
+      lastSavedDocumentRef.current = nextDocument;
+      setSaveState('saved');
+      setProjects((prev) =>
+        prev.map((item) => (item.id === project.id ? { ...item, modified: new Date().toISOString() } : item))
+      );
+    } catch (err) {
+      setSaveState('error');
+      setError(`Save failed: ${String(err)}`);
+    }
+  }
+
+  async function openProject(project: ProjectMeta, skipFlush = false) {
+    try {
+      if (!skipFlush) {
+        await flushDocumentSave(activeProject);
+      }
+
       setLoading(true);
       setError(null);
       documentCacheRef.current = {};
-      setActiveProject(project);
 
-      const [rawDocument, savePoints] = await Promise.all([api.loadDocument(project.id), api.getTimeline(project.id)]);
+      const [rawDocument, savePoints, backupEntries] = await Promise.all([
+        api.loadDocument(project.id),
+        api.getTimeline(project.id),
+        api.listBackups(project.id).catch(() => [])
+      ]);
+
       const parsed = parseDocument(rawDocument);
-      const latestSavePoint = getLatestSavePoint(savePoints);
+      const latestSnapshot = savePoints[savePoints.length - 1] ?? null;
       const nextTitle = project.title || parsed.meta.title || 'Untitled Project';
 
+      setActiveProjectId(project.id);
       setTitle(nextTitle);
       setDocumentMeta(parsed.meta);
       setBody(parsed.body);
       setTimeline(savePoints);
-      setCompareLeftRef(latestSavePoint?.hash ?? 'current');
-      setCompareRightRef('current');
-      setShowChanges(true);
-      setShowCompareSources(true);
+      setBackups(backupEntries);
+      setCompareRef(latestSnapshot?.hash ?? 'current');
+      setChangesOpen(false);
+      setSettingsOpen(false);
       lastSavedDocumentRef.current = rawDocument;
       lastRenamedTitleRef.current = nextTitle;
+      window.localStorage.setItem(ACTIVE_PROJECT_KEY, project.id);
+      setNotice(null);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -683,54 +706,121 @@ export function App() {
     }
   }
 
-  async function createProject() {
+  async function refreshProjects(activeId?: string) {
+    const projectList = await api.listProjects();
+    setProjects(projectList);
+    if (activeId && !projectById(projectList, activeId) && projectList[0]) {
+      await openProject(projectList[0], true);
+    }
+  }
+
+  async function handleCreateProject() {
     const requestedTitle = window.prompt('New project title', 'Untitled Project');
     if (!requestedTitle) return;
 
-    const trimmedTitle = requestedTitle.trim();
-    if (!trimmedTitle) return;
-
     try {
-      const created = await api.createProject(trimmedTitle);
+      const created = await api.createProject(requestedTitle.trim() || 'Untitled Project');
       const nextProjects = await api.listProjects();
       setProjects(nextProjects);
-      await openProject(created);
+      await openProject(created, true);
     } catch (err) {
       setError(`Project creation failed: ${String(err)}`);
     }
   }
 
-  async function createSavePoint() {
-    if (!activeProject || isCreatingSavePoint) return;
+  async function handleDeleteProject() {
+    if (!activeProject) return;
+    const confirmed = window.confirm(`Delete "${activeProject.title}" and its local backups?`);
+    if (!confirmed) return;
 
     try {
-      setIsCreatingSavePoint(true);
-      setError(null);
+      await api.deleteProject(activeProject.id);
+      const nextProjects = await api.listProjects();
+      setProjects(nextProjects);
+      setBackups([]);
+      setTimeline([]);
+      setBody('');
+      setTitle('');
+      setDocumentMeta({});
+      const nextProject = nextProjects[0] ?? null;
+      if (nextProject) {
+        await openProject(nextProject, true);
+      } else {
+        setActiveProjectId(null);
+      }
+    } catch (err) {
+      setError(`Delete failed: ${String(err)}`);
+    }
+  }
 
-      const latestDocument = composeDocument(documentMeta, title, body);
-      await api.saveDocument(activeProject.id, latestDocument);
-      lastSavedDocumentRef.current = latestDocument;
+  async function handleSnapshot() {
+    if (!activeProject) return;
 
-      const saved = await api.createSavePoint(activeProject.id, saveMessage);
-      documentCacheRef.current[saved.hash] = body;
-
-      const [nextProjects, nextTimeline] = await Promise.all([
+    try {
+      await flushDocumentSave(activeProject);
+      const savePoint = await api.createSavePoint(activeProject.id, '');
+      const [nextTimeline, nextProjects, nextBackups] = await Promise.all([
+        api.getTimeline(activeProject.id),
         api.listProjects(),
-        api.getTimeline(activeProject.id)
+        api.listBackups(activeProject.id).catch(() => [])
       ]);
 
-      setProjects(nextProjects);
+      documentCacheRef.current[savePoint.hash] = body;
       setTimeline(nextTimeline);
-      setCompareLeftRef(saved.hash);
-      setCompareRightRef('current');
-      setSaveMessage('');
-      setShowSavePointModal(false);
-      setShowChanges(true);
-      setShowCompareSources(true);
+      setProjects(nextProjects);
+      setBackups(nextBackups);
+      setCompareRef(savePoint.hash);
+      setChangesOpen(true);
+      setNotice(`Snapshot created: ${savePoint.message}`);
     } catch (err) {
       setError(`Snapshot failed: ${String(err)}`);
+    }
+  }
+
+  async function handleBackup() {
+    if (!activeProject) return;
+
+    try {
+      await flushDocumentSave(activeProject);
+      const created = await api.createBackup(activeProject.id);
+      setBackups(await api.listBackups(activeProject.id));
+      setNotice(`Backup written to ${created.path}`);
+    } catch (err) {
+      setError(`Backup failed: ${String(err)}`);
+    }
+  }
+
+  async function handleExport(format?: ExportFormat) {
+    if (!activeProject) return;
+
+    try {
+      await flushDocumentSave(activeProject);
+      const exported = await api.exportProject(activeProject.id, format ?? settings.defaultExportFormat);
+      setNotice(`Exported ${exported.format.toUpperCase()} to ${exported.path}`);
+    } catch (err) {
+      setError(`Export failed: ${String(err)}`);
+    }
+  }
+
+  async function handleImport(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const lowerName = file.name.toLowerCase();
+      const isDocx = lowerName.endsWith('.docx');
+      const content = isDocx ? bytesToBase64(new Uint8Array(await file.arrayBuffer())) : await file.text();
+      const imported = await api.importProject(file.name, content, isDocx ? 'base64' : 'utf8');
+      const nextProjects = await api.listProjects();
+      setProjects(nextProjects);
+      await openProject(imported, true);
+      setNotice(`Imported ${file.name}`);
+    } catch (err) {
+      setError(`Import failed: ${String(err)}`);
     } finally {
-      setIsCreatingSavePoint(false);
+      if (event.target) {
+        event.target.value = '';
+      }
     }
   }
 
@@ -767,12 +857,13 @@ export function App() {
     const segment = body.slice(lineStart, lineEnd);
     const lines = segment.split('\n');
     const allPrefixed = lines.every((line) => !line.trim() || line.startsWith(prefix));
-    const updatedLines = lines.map((line) => {
-      if (!line.trim()) return line;
-      return allPrefixed ? line.replace(prefix, '') : `${prefix}${line}`;
-    });
+    const replacement = lines
+      .map((line) => {
+        if (!line.trim()) return line;
+        return allPrefixed ? line.replace(prefix, '') : `${prefix}${line}`;
+      })
+      .join('\n');
 
-    const replacement = updatedLines.join('\n');
     const nextBody = `${body.slice(0, lineStart)}${replacement}${body.slice(lineEnd)}`;
     updateTextareaSelection(replacement, lineStart, lineStart + replacement.length, nextBody);
   }
@@ -782,9 +873,20 @@ export function App() {
     if (!textarea) return;
 
     const start = textarea.selectionStart;
-    const insertion = '\n\n* * *\n\n';
-    const nextBody = `${body.slice(0, start)}${insertion}${body.slice(textarea.selectionEnd)}`;
-    updateTextareaSelection(insertion, start + insertion.length, start + insertion.length, nextBody);
+    const replacement = '\n\n* * *\n\n';
+    const nextBody = `${body.slice(0, start)}${replacement}${body.slice(textarea.selectionEnd)}`;
+    updateTextareaSelection(replacement, start + replacement.length, start + replacement.length, nextBody);
+  }
+
+  function jumpToMatch(direction: 1 | -1) {
+    if (!searchMatches.length || !textareaRef.current) return;
+
+    const nextIndex =
+      (activeMatchIndex + direction + searchMatches.length) % searchMatches.length;
+    const match = searchMatches[nextIndex];
+    setActiveMatchIndex(nextIndex);
+    textareaRef.current.focus();
+    textareaRef.current.setSelectionRange(match.start, match.end);
   }
 
   function handleEditorKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -806,26 +908,25 @@ export function App() {
       event.preventDefault();
       wrapSelection('<u>', '</u>');
     }
+
+    if (key === 'f') {
+      event.preventDefault();
+      const selected = body.slice(textareaRef.current?.selectionStart ?? 0, textareaRef.current?.selectionEnd ?? 0).trim();
+      if (selected) {
+        setFindQuery(selected);
+      }
+    }
   }
 
-  const wordCount = useMemo(() => countWords(body), [body]);
-  const diffSummary = useMemo(() => summarizeDiff(diffResult), [diffResult]);
-  const visibleBlocks = useMemo(() => {
-    if (showUnchanged) return diffResult.blocks;
-    return diffResult.blocks.filter((block) => block.type !== 'unchanged');
-  }, [diffResult.blocks, showUnchanged]);
-
-  const leftLabel = sourceLabel(compareLeftRef, timeline);
-  const rightLabel = sourceLabel(compareRightRef, timeline);
-  const themeClass = settings.theme === 'light' ? 'theme-light' : 'theme-mist';
+  const themeClass = settings.theme === 'light' ? 'theme-light' : settings.theme === 'system' ? 'theme-system' : 'theme-mist';
+  const shellClass = `app-shell ${themeClass} ${settings.focusMode ? 'focus-mode' : ''}`;
 
   if (loading) {
     return (
-      <div className="state-screen">
-        <img src="/inkline-icon.svg" alt="" className="brand-icon large" />
+      <div className={`state-screen ${themeClass}`}>
         <div className="brand-lockup">
           <span className="brand-mark">{BRAND_NAME}</span>
-          <h1>Loading your studio…</h1>
+          <h1>Loading your writing studio…</h1>
         </div>
       </div>
     );
@@ -834,517 +935,515 @@ export function App() {
   if (!activeProject) {
     return (
       <div className={`state-screen ${themeClass}`}>
-        <img src="/inkline-icon.svg" alt="" className="brand-icon large" />
         <div className="brand-lockup">
           <span className="brand-mark">{BRAND_NAME}</span>
-          <h1>A writing studio built around snapshots.</h1>
-          <p>Set your page the way you like it, write in a clean white canvas, and compare any two moments in the draft.</p>
+          <h1>A sharper desktop writing studio.</h1>
+          <p>Thin ribbon controls, snapshots that compare properly, and backups you can move between machines.</p>
         </div>
 
-        <button className="primary" onClick={() => void createProject()}>
-          New Project
-        </button>
+        <div className="welcome-actions">
+          <button className="primary-button" onClick={() => void handleCreateProject()}>
+            New project
+          </button>
+          <button className="secondary-button" onClick={() => fileInputRef.current?.click()}>
+            Import file
+          </button>
+        </div>
 
         {projects.length > 0 && (
-          <div className="project-list">
+          <div className="project-grid">
             {projects.map((project) => (
-              <button key={project.id} className="project-card" onClick={() => void openProject(project)}>
-                <div className="project-card-title">{project.title}</div>
-                <small>
+              <button key={project.id} className="project-card" onClick={() => void openProject(project, true)}>
+                <strong>{project.title}</strong>
+                <span>
                   {project.wordCount} words · {project.savePointCount} snapshots
-                </small>
+                </span>
               </button>
             ))}
           </div>
         )}
+
+        <input
+          ref={fileInputRef}
+          hidden
+          type="file"
+          accept=".docx,.md,.txt,.markdown,.inkline,.json"
+          onChange={(event) => void handleImport(event)}
+        />
       </div>
     );
   }
 
   return (
-    <div className={`app-shell ${themeClass}`}>
-      <header className="top-bar">
-        <div className="top-bar-copy">
-          <div className="brand-lockup inline">
-            <img src="/inkline-icon.svg" alt="" className="brand-icon" />
-            <div>
-              <span className="brand-mark">{BRAND_NAME}</span>
-              <p className="brand-subtitle">Clean drafting. Fast comparisons.</p>
-            </div>
-          </div>
+    <div className={shellClass}>
+      <input
+        ref={fileInputRef}
+        hidden
+        type="file"
+        accept=".docx,.md,.txt,.markdown,.inkline,.json"
+        onChange={(event) => void handleImport(event)}
+      />
 
-          <input
-            aria-label="Document title"
-            className="title-input"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            onBlur={() => {
-              if (!title.trim()) {
-                setTitle('Untitled Project');
-              }
-            }}
-          />
-
-          <div className="top-bar-meta">
-            <span>{wordCount} words</span>
-            <span>{timeline.length} snapshots</span>
-            <span>
-              {leftLabel} → {rightLabel}
-            </span>
-          </div>
+      <header className="window-header">
+        <div className="brand-lockup inline">
+          <span className="brand-mark">{BRAND_NAME}</span>
+          <p>Write, compare, recover.</p>
         </div>
 
-        <div className="actions">
-          <button
-            className="icon-button"
-            onClick={() => setShowSavePointModal(true)}
-            title="Create a named snapshot of the current manuscript"
-          >
+        <div className="header-actions">
+          <span className={`save-pill state-${saveState}`}>{saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : saveState === 'error' ? 'Save error' : 'Ready'}</span>
+          <button className="secondary-button" onClick={() => setSettingsOpen((open) => !open)}>
+            Settings
+          </button>
+          <button className="secondary-button" onClick={() => setChangesOpen((open) => !open)}>
+            Changes
+          </button>
+          <button className="primary-button" onClick={() => void handleSnapshot()}>
             Snapshot
-          </button>
-          <button
-            className="icon-button"
-            onClick={() => setShowChanges((open) => !open)}
-            title="Show or hide the Changes panel"
-          >
-            {showChanges ? 'Hide Changes' : 'Show Changes'}
-          </button>
-          <button
-            className="icon-button"
-            onClick={() => setShowStudio((open) => !open)}
-            title="Open deeper preferences like autosave and page guides"
-          >
-            Studio
-          </button>
-          <button
-            className="icon-button"
-            onClick={() => setShowWalkthrough(true)}
-            title="Open the quick walkthrough again"
-          >
-            Guide
-          </button>
-          <button className="primary" onClick={() => void createProject()} title="Create a fresh manuscript project">
-            New
           </button>
         </div>
       </header>
 
-      <section className="ribbon">
-        <div className="ribbon-group">
-          <div className="ribbon-controls">
-            <button className="tool-button strong" onClick={() => wrapSelection('**')} title="Bold the selected text (Ctrl/Cmd+B)">
-              B
-            </button>
-            <button className="tool-button italic" onClick={() => wrapSelection('*')} title="Italicize the selected text (Ctrl/Cmd+I)">
-              I
-            </button>
-            <button
-              className="tool-button underline"
-              onClick={() => wrapSelection('<u>', '</u>')}
-              title="Underline the selected text (Ctrl/Cmd+U)"
-            >
-              U
-            </button>
-            <button className="tool-button" onClick={() => toggleLinePrefix('> ')} title="Turn the current lines into a block quote">
-              Quote
-            </button>
-            <button className="tool-button" onClick={() => toggleLinePrefix('- ')} title="Toggle a bullet list for the selected lines">
-              List
-            </button>
-            <button className="tool-button" onClick={insertSceneBreak} title="Insert a scene break">
-              Break
-            </button>
-          </div>
-          <span className="ribbon-caption">Format</span>
+      <section className="ribbon-shell">
+        <div className="ribbon-tabs">
+          <span className="tab active">Home</span>
+          <span className="tab">Review</span>
+          <span className="tab">View</span>
+          <span className="tab">File</span>
         </div>
 
-        <div className="ribbon-group">
-          <div className="ribbon-controls">
-            <label className="ribbon-field" title="Choose the page font for drafting">
-              <span>Font</span>
+        <div className="ribbon">
+          <div className="ribbon-group">
+            <label className="field">
+              <span>Project</span>
               <select
-                value={settings.font}
-                onChange={(event) => setSettings((prev) => ({ ...prev, font: event.target.value }))}
+                value={activeProject.id}
+                onChange={(event) => {
+                  const nextProject = projectById(projects, event.target.value);
+                  if (nextProject) {
+                    void openProject(nextProject);
+                  }
+                }}
               >
-                {FONT_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.title}
                   </option>
                 ))}
               </select>
             </label>
-
-            <label className="ribbon-field" title="Adjust the manuscript font size">
-              <span>Size</span>
-              <select
-                value={settings.fontSize}
-                onChange={(event) =>
-                  setSettings((prev) => ({ ...prev, fontSize: Number(event.target.value) }))
-                }
-              >
-                {FONT_SIZE_OPTIONS.map((size) => (
-                  <option key={size} value={size}>
-                    {size}px
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="ribbon-field" title="Set line spacing for the manuscript">
-              <span>Spacing</span>
-              <select
-                value={settings.lineHeight}
-                onChange={(event) =>
-                  setSettings((prev) => ({ ...prev, lineHeight: Number(event.target.value) }))
-                }
-              >
-                {LINE_HEIGHT_OPTIONS.map((lineHeight) => (
-                  <option key={lineHeight} value={lineHeight}>
-                    {lineHeight.toFixed(2)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="ribbon-field" title="Choose the page width for the writing canvas">
-              <span>Page</span>
-              <select
-                value={settings.editorWidth}
-                onChange={(event) =>
-                  setSettings((prev) => ({ ...prev, editorWidth: Number(event.target.value) }))
-                }
-              >
-                {WIDTH_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="button-row">
+              <button className="icon-button" onClick={() => void handleCreateProject()}>
+                New
+              </button>
+              <button className="icon-button" onClick={() => fileInputRef.current?.click()}>
+                Import
+              </button>
+              <button className="icon-button" onClick={() => void handleExport()}>
+                Export
+              </button>
+            </div>
+            <span className="group-label">Project</span>
           </div>
-          <span className="ribbon-caption">Page</span>
-        </div>
 
-        <div className="ribbon-group">
-          <div className="ribbon-controls">
-            <button
-              className={`tool-button ${showCompareSources ? 'active' : ''}`}
-              onClick={() => setShowCompareSources((open) => !open)}
-              title="Show or hide the left and right snapshot timelines"
-            >
-              Timelines
-            </button>
-            <button
-              className={`tool-button ${settings.showRuler ? 'active' : ''}`}
-              onClick={() => setSettings((prev) => ({ ...prev, showRuler: !prev.showRuler }))}
-              title="Show or hide the page ruler"
-            >
-              Ruler
-            </button>
-            <button
-              className={`tool-button ${showUnchanged ? 'active' : ''}`}
-              onClick={() => setShowUnchanged((value) => !value)}
-              title="Keep unchanged passages visible in the Changes panel"
-            >
-              Matches
-            </button>
+          <div className="ribbon-group">
+            <div className="button-row">
+              <button className="icon-button strong" onClick={() => wrapSelection('**')}>
+                B
+              </button>
+              <button className="icon-button italic" onClick={() => wrapSelection('*')}>
+                I
+              </button>
+              <button className="icon-button" onClick={() => wrapSelection('<u>', '</u>')}>
+                U
+              </button>
+              <button className="icon-button" onClick={() => toggleLinePrefix('> ')}>
+                Quote
+              </button>
+              <button className="icon-button" onClick={() => toggleLinePrefix('- ')}>
+                List
+              </button>
+              <button className="icon-button" onClick={insertSceneBreak}>
+                Break
+              </button>
+            </div>
+            <span className="group-label">Format</span>
           </div>
-          <span className="ribbon-caption">Review</span>
+
+          <div className="ribbon-group">
+            <div className="compact-grid">
+              <label className="field">
+                <span>Font</span>
+                <select value={settings.font} onChange={(event) => setSettings((prev) => ({ ...prev, font: event.target.value }))}>
+                  {FONT_OPTIONS.map((font) => (
+                    <option key={font} value={font}>
+                      {font}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Size</span>
+                <select
+                  value={settings.fontSize}
+                  onChange={(event) => setSettings((prev) => ({ ...prev, fontSize: Number(event.target.value) }))}
+                >
+                  {FONT_SIZE_OPTIONS.map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Width</span>
+                <select
+                  value={settings.editorWidth}
+                  onChange={(event) => setSettings((prev) => ({ ...prev, editorWidth: Number(event.target.value) }))}
+                >
+                  {WIDTH_OPTIONS.map((width) => (
+                    <option key={width} value={width}>
+                      {width}px
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Leading</span>
+                <select
+                  value={settings.lineHeight}
+                  onChange={(event) => setSettings((prev) => ({ ...prev, lineHeight: Number(event.target.value) }))}
+                >
+                  {LINE_HEIGHT_OPTIONS.map((lineHeight) => (
+                    <option key={lineHeight} value={lineHeight}>
+                      {lineHeight}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <span className="group-label">Page</span>
+          </div>
+
+          <div className="ribbon-group">
+            <div className="button-row wrap">
+              <button
+                className={`toggle-chip ${settings.showRuler ? 'active' : ''}`}
+                onClick={() => setSettings((prev) => ({ ...prev, showRuler: !prev.showRuler }))}
+              >
+                Ruler
+              </button>
+              <button
+                className={`toggle-chip ${settings.showSpellcheck ? 'active' : ''}`}
+                onClick={() => setSettings((prev) => ({ ...prev, showSpellcheck: !prev.showSpellcheck }))}
+              >
+                Spellcheck
+              </button>
+              <button
+                className={`toggle-chip ${settings.highlightMatches ? 'active' : ''}`}
+                onClick={() => setSettings((prev) => ({ ...prev, highlightMatches: !prev.highlightMatches }))}
+              >
+                Matches
+              </button>
+              <button
+                className={`toggle-chip ${settings.focusMode ? 'active' : ''}`}
+                onClick={() => setSettings((prev) => ({ ...prev, focusMode: !prev.focusMode }))}
+              >
+                Focus
+              </button>
+            </div>
+            <span className="group-label">View</span>
+          </div>
+
+          <div className="ribbon-group grow">
+            <div className="search-strip">
+              <label className="search-field">
+                <span>Find</span>
+                <input value={findQuery} onChange={(event) => setFindQuery(event.target.value)} placeholder="Find in draft" />
+              </label>
+              <span className="match-pill">
+                {searchMatches.length ? `${activeMatchIndex + 1}/${searchMatches.length}` : '0 matches'}
+              </span>
+              <button className="icon-button" onClick={() => jumpToMatch(-1)} disabled={!searchMatches.length}>
+                Prev
+              </button>
+              <button className="icon-button" onClick={() => jumpToMatch(1)} disabled={!searchMatches.length}>
+                Next
+              </button>
+            </div>
+            <span className="group-label">Find</span>
+          </div>
         </div>
       </section>
 
-      {error && <div className="error-banner">{error}</div>}
-
-      <main className={`workspace-shell ${showChanges ? 'with-changes' : ''}`}>
-        <section className="editor-panel">
-          <div className="editor-panel-header">
-            <div>
-              <span className="ribbon-caption">Draft</span>
-              <p>Plain white page, autosaved as you write.</p>
-            </div>
-            <span className="editor-status">Autosave every {settings.autosaveIntervalMs / 1000}s</span>
-          </div>
-
-          <div className="editor-stage">
-            <div className="editor-page" style={{ maxWidth: `${settings.editorWidth}px` }}>
-              {settings.showRuler && (
-                <div className="page-ruler" aria-hidden="true">
-                  <span>0</span>
-                  <span>15</span>
-                  <span>30</span>
-                  <span>45</span>
-                  <span>60</span>
-                </div>
-              )}
-
-              <textarea
-                ref={textareaRef}
-                aria-label="Writing editor"
-                className="editor"
-                value={body}
-                onChange={(event) => setBody(event.target.value)}
-                onKeyDown={handleEditorKeyDown}
-                placeholder="Start writing..."
-                style={{
-                  fontFamily: `"${settings.font}", serif`,
-                  fontSize: `${settings.fontSize}px`,
-                  lineHeight: String(settings.lineHeight)
-                }}
-              />
-            </div>
-          </div>
-        </section>
-
-        {showChanges && (
-          <aside className={`changes-pane changes-tone-${diffTone}`}>
-            <div className="changes-header">
-              <div>
-                <span className="ribbon-caption">Changes</span>
-                <h2>
-                  {leftLabel} → {rightLabel}
-                </h2>
-                <p>{diffGranularity === 'paragraphs' ? 'Paragraph-aware comparison' : 'Line-by-line comparison'}</p>
-              </div>
-
-              <div className="changes-controls">
-                <div className="view-switcher" role="tablist" aria-label="Changes view mode">
-                  <button
-                    className={`view-chip ${diffViewMode === 'split' ? 'active' : ''}`}
-                    onClick={() => setDiffViewMode('split')}
-                  >
-                    Split
-                  </button>
-                  <button
-                    className={`view-chip ${diffViewMode === 'unified' ? 'active' : ''}`}
-                    onClick={() => setDiffViewMode('unified')}
-                  >
-                    Unified
-                  </button>
-                </div>
-
-                <label className="compact-field" title="Switch between paragraph and line-based comparisons">
-                  <span>Mode</span>
-                  <select
-                    value={diffGranularity}
-                    onChange={(event) => setDiffGranularity(event.target.value as DiffGranularity)}
-                  >
-                    <option value="paragraphs">Paragraphs</option>
-                    <option value="lines">Lines</option>
-                  </select>
-                </label>
-
-                <label className="compact-field" title="Change how additions and deletions are colored">
-                  <span>Color</span>
-                  <select value={diffTone} onChange={(event) => setDiffTone(event.target.value as DiffTone)}>
-                    <option value="classic">Classic</option>
-                    <option value="ink">Ink</option>
-                    <option value="warm">Warm</option>
-                  </select>
-                </label>
-              </div>
-            </div>
-
-            <div className="diff-summary">
-              <span>{diffSummary.modified} edited</span>
-              <span>{diffSummary.added} added</span>
-              <span>{diffSummary.deleted} removed</span>
-            </div>
-
-            {showCompareSources && (
-              <div className="compare-grid">
-                <CompareTimeline
-                  label="Left"
-                  description={`${sourceLabel(compareLeftRef, timeline)} · ${sourceTimestamp(compareLeftRef, timeline)}`}
-                  selectedRef={compareLeftRef}
-                  timeline={timeline}
-                  onSelect={setCompareLeftRef}
-                />
-                <CompareTimeline
-                  label="Right"
-                  description={`${sourceLabel(compareRightRef, timeline)} · ${sourceTimestamp(compareRightRef, timeline)}`}
-                  selectedRef={compareRightRef}
-                  timeline={timeline}
-                  onSelect={setCompareRightRef}
-                />
-              </div>
-            )}
-
-            {isDiffLoading ? (
-              <p className="diff-placeholder">Loading changes…</p>
-            ) : visibleBlocks.length === 0 ? (
-              <p className="diff-placeholder">No meaningful differences between the two selected sources.</p>
-            ) : diffViewMode === 'unified' ? (
-              <div className="diff-unified-list">
-                {visibleBlocks.map((block, index) => (
-                  <article key={`${block.type}-${index}`} className={`unified-block diff-${block.type}`}>
-                    <div className="unified-header">
-                      <span>{diffGranularity === 'paragraphs' ? `Passage ${index + 1}` : `Line ${index + 1}`}</span>
-                      <strong>{block.type}</strong>
-                    </div>
-                    <div className="unified-columns">
-                      <div className="unified-column">
-                        <span className="unified-label">{leftLabel}</span>
-                        <div className="diff-copy">{renderDiffSide(block, 'left')}</div>
-                      </div>
-                      <div className="unified-column">
-                        <span className="unified-label">{rightLabel}</span>
-                        <div className="diff-copy">{renderDiffSide(block, 'right')}</div>
-                      </div>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <div className="split-diff-table">
-                <div className="split-diff-head">{leftLabel}</div>
-                <div className="split-diff-head">{rightLabel}</div>
-
-                {visibleBlocks.map((block, index) => (
-                  <div key={`${block.type}-${index}`} className={`split-diff-row diff-${block.type}`}>
-                    <div className={`split-diff-cell split-left ${block.type === 'added' ? 'is-empty-cell' : ''}`}>
-                      <span className="diff-line-number">{index + 1}</span>
-                      <div className="diff-cell-copy">{renderDiffSide(block, 'left')}</div>
-                    </div>
-                    <div className={`split-diff-cell split-right ${block.type === 'deleted' ? 'is-empty-cell' : ''}`}>
-                      <span className="diff-line-number">{index + 1}</span>
-                      <div className="diff-cell-copy">{renderDiffSide(block, 'right')}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </aside>
-        )}
-      </main>
-
-      {showSavePointModal && (
-        <div className="overlay">
-          <div className="floating-panel save-point-modal" role="dialog" aria-modal="true">
-            <span className="ribbon-caption">Create Snapshot</span>
-            <h2>Name this moment</h2>
-            <p>The name becomes part of both timelines, so keep it quick and descriptive.</p>
+      <main className="workspace">
+        <section className="editor-shell">
+          <div className="document-header">
             <input
-              value={saveMessage}
-              onChange={(event) => setSaveMessage(event.target.value)}
-              placeholder='e.g. "Sharpened chapter opening"'
-              autoFocus
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  void createSavePoint();
-                }
-                if (event.key === 'Escape') {
-                  setShowSavePointModal(false);
+              className="title-input"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              onBlur={() => {
+                if (!title.trim()) {
+                  setTitle('Untitled Project');
                 }
               }}
             />
-            <div className="modal-actions">
-              <button className="primary" onClick={() => void createSavePoint()}>
-                {isCreatingSavePoint ? 'Saving…' : 'Save Snapshot'}
-              </button>
-              <button className="icon-button" onClick={() => setShowSavePointModal(false)}>
-                Cancel
-              </button>
+
+            <div className="document-meta">
+              <span>{activeProject.savePointCount} snapshots</span>
+              <span>Modified {formatTimestamp(activeProject.modified)}</span>
+              <span>{readingTimeLabel(wordCount)}</span>
             </div>
           </div>
-        </div>
-      )}
 
-      {showStudio && (
-        <div className="overlay">
-          <aside className="floating-panel studio-panel" role="dialog" aria-modal="true">
+          {settings.showRuler && (
+            <div className="ruler">
+              {Array.from({ length: 12 }, (_, index) => (
+                <span key={index}>{index + 1}</span>
+              ))}
+            </div>
+          )}
+
+          <div className="editor-surface" style={{ maxWidth: settings.editorWidth }}>
+            <textarea
+              ref={textareaRef}
+              className="editor"
+              value={body}
+              spellCheck={settings.showSpellcheck}
+              onBlur={() => void flushDocumentSave(activeProject)}
+              onChange={(event) => setBody(event.target.value)}
+              onKeyDown={handleEditorKeyDown}
+              placeholder="Start writing…"
+              style={{
+                fontFamily: settings.font,
+                fontSize: `${settings.fontSize}px`,
+                lineHeight: settings.lineHeight
+              }}
+            />
+          </div>
+        </section>
+
+        {settingsOpen && (
+          <aside className="side-panel settings-panel">
             <div className="panel-header">
               <div>
-                <span className="ribbon-caption">Studio</span>
-                <h2>Less-used preferences</h2>
+                <span className="panel-kicker">Settings</span>
+                <h2>Writing controls</h2>
               </div>
-              <button className="icon-button" onClick={() => setShowStudio(false)}>
+              <button className="icon-button" onClick={() => setSettingsOpen(false)}>
                 Close
               </button>
             </div>
 
-            <label className="settings-field">
-              <span>Shell theme</span>
-              <select
-                value={settings.theme}
-                onChange={(event) =>
-                  setSettings((prev) => ({ ...prev, theme: event.target.value as AppSettings['theme'] }))
-                }
-              >
-                <option value="mist">Mist</option>
-                <option value="light">Light</option>
-                <option value="system">System</option>
-              </select>
-            </label>
+            <section className="panel-section">
+              <h3>Drafting</h3>
+              <div className="settings-grid">
+                <label className="field">
+                  <span>Autosave</span>
+                  <select
+                    value={settings.autosaveIntervalMs}
+                    onChange={(event) => setSettings((prev) => ({ ...prev, autosaveIntervalMs: Number(event.target.value) }))}
+                  >
+                    {AUTOSAVE_OPTIONS.map((value) => (
+                      <option key={value} value={value}>
+                        {value / 1000}s
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Backup cadence</span>
+                  <select
+                    value={settings.backupIntervalMs}
+                    onChange={(event) => setSettings((prev) => ({ ...prev, backupIntervalMs: Number(event.target.value) }))}
+                  >
+                    {BACKUP_OPTIONS.map((value) => (
+                      <option key={value} value={value}>
+                        {Math.round(value / 60000)} min
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Theme</span>
+                  <select value={settings.theme} onChange={(event) => setSettings((prev) => ({ ...prev, theme: event.target.value as AppSettings['theme'] }))}>
+                    <option value="mist">Mist</option>
+                    <option value="light">Light</option>
+                    <option value="system">System</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Default export</span>
+                  <select
+                    value={settings.defaultExportFormat}
+                    onChange={(event) => setSettings((prev) => ({ ...prev, defaultExportFormat: event.target.value as ExportFormat }))}
+                  >
+                    {EXPORT_OPTIONS.map((format) => (
+                      <option key={format} value={format}>
+                        {format.toUpperCase()}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </section>
 
-            <label className="settings-field">
-              <span>Autosave</span>
-              <select
-                value={settings.autosaveIntervalMs}
-                onChange={(event) =>
-                  setSettings((prev) => ({ ...prev, autosaveIntervalMs: Number(event.target.value) }))
-                }
-              >
-                {AUTOSAVE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <section className="panel-section">
+              <h3>Interface</h3>
+              <div className="toggle-list">
+                <button className={`toggle-row ${settings.showWordCount ? 'active' : ''}`} onClick={() => setSettings((prev) => ({ ...prev, showWordCount: !prev.showWordCount }))}>
+                  Word count
+                </button>
+                <button className={`toggle-row ${settings.showCharacterCount ? 'active' : ''}`} onClick={() => setSettings((prev) => ({ ...prev, showCharacterCount: !prev.showCharacterCount }))}>
+                  Character count
+                </button>
+                <button className={`toggle-row ${settings.showReadingTime ? 'active' : ''}`} onClick={() => setSettings((prev) => ({ ...prev, showReadingTime: !prev.showReadingTime }))}>
+                  Reading time
+                </button>
+                <button className={`toggle-row ${settings.showStatusBar ? 'active' : ''}`} onClick={() => setSettings((prev) => ({ ...prev, showStatusBar: !prev.showStatusBar }))}>
+                  Status bar
+                </button>
+              </div>
+            </section>
 
-            <label className="settings-toggle">
-              <input
-                type="checkbox"
-                checked={settings.showRuler}
-                onChange={(event) => setSettings((prev) => ({ ...prev, showRuler: event.target.checked }))}
-              />
-              <span>Show the page ruler</span>
-            </label>
+            <section className="panel-section">
+              <h3>Backups and transfer</h3>
+              <div className="path-list">
+                <div>
+                  <span>Workspace</span>
+                  <code>{storage?.appRoot || settings.projectsDirectory}</code>
+                </div>
+                <div>
+                  <span>Backups</span>
+                  <code>{storage?.backupsDirectory || settings.backupsDirectory}</code>
+                </div>
+                <div>
+                  <span>Exports</span>
+                  <code>{storage?.exportsDirectory || settings.exportsDirectory}</code>
+                </div>
+              </div>
+              <div className="button-row wrap">
+                <button className="secondary-button" onClick={() => void handleBackup()}>
+                  Create backup now
+                </button>
+                <button className="secondary-button" onClick={() => void handleExport('inkline')}>
+                  Export portable bundle
+                </button>
+                <button className="secondary-button" onClick={() => fileInputRef.current?.click()}>
+                  Import Word or text
+                </button>
+              </div>
+            </section>
 
-            <div className="settings-field static">
-              <span>Projects directory</span>
-              <strong>{settings.projectsDirectory || 'Managed automatically by the desktop app'}</strong>
-            </div>
+            <section className="panel-section">
+              <h3>Project maintenance</h3>
+              <div className="button-row wrap">
+                <button className="secondary-button" onClick={() => void refreshProjects(activeProject.id)}>
+                  Refresh project list
+                </button>
+                <button className="danger-button" onClick={() => void handleDeleteProject()}>
+                  Delete project
+                </button>
+              </div>
+            </section>
           </aside>
-        </div>
-      )}
+        )}
+      </main>
 
-      {showWalkthrough && (
-        <div className="overlay">
-          <div className="floating-panel walkthrough-panel" role="dialog" aria-modal="true">
-            <span className="ribbon-caption">Quick Tour</span>
-            <h2>Three things to know</h2>
-            <div className="walkthrough-grid">
-              <article>
-                <strong>Set the page first</strong>
-                <p>Use the ribbon to choose your font, size, spacing, and page width before you settle in.</p>
-              </article>
-              <article>
-                <strong>Capture snapshots often</strong>
-                <p>The Snapshot button stores named moments so you can compare structure, pacing, or edits later.</p>
-              </article>
-              <article>
-                <strong>Use Changes to compare</strong>
-                <p>Pick any left and right sources, switch between paragraph and line mode, and change the color style if needed.</p>
-              </article>
-            </div>
-            <div className="modal-actions">
+      <aside className={`changes-drawer ${changesOpen ? 'open' : ''}`}>
+        <div className="changes-header">
+          <div>
+            <span className="panel-kicker">Changes</span>
+            <h2>Snapshot compare</h2>
+          </div>
+          <button className="icon-button" onClick={() => setChangesOpen(false)}>
+            Close
+          </button>
+        </div>
+
+        <div className="changes-toolbar">
+          <label className="field">
+            <span>Compare from</span>
+            <select value={compareRef} onChange={(event) => setCompareRef(event.target.value)}>
+              <option value="current">Current draft</option>
+              {[...timeline].reverse().map((point) => (
+                <option key={point.hash} value={point.hash}>
+                  {point.message} · {formatTimestamp(point.timestamp)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Granularity</span>
+            <select
+              value={diffGranularity}
+              onChange={(event) => setDiffGranularity(event.target.value as DiffGranularity)}
+            >
+              <option value="paragraphs">Paragraphs</option>
+              <option value="lines">Lines</option>
+            </select>
+          </label>
+          <button className={`toggle-chip ${showUnchanged ? 'active' : ''}`} onClick={() => setShowUnchanged((value) => !value)}>
+            Show unchanged
+          </button>
+        </div>
+
+        <div className="changes-layout">
+          <div className="snapshot-rail">
+            {[...timeline].reverse().map((point) => (
               <button
-                className="primary"
-                onClick={() => {
-                  window.localStorage.setItem(WALKTHROUGH_KEY, 'done');
-                  setShowWalkthrough(false);
-                }}
+                key={point.hash}
+                className={`snapshot-card ${compareRef === point.hash ? 'active' : ''}`}
+                onClick={() => setCompareRef(point.hash)}
               >
-                Start Writing
+                <strong>{point.message}</strong>
+                <span>{formatTimestamp(point.timestamp)}</span>
+                <small>{point.changeSize} changed words</small>
               </button>
-              <button className="icon-button" onClick={() => setShowWalkthrough(false)}>
-                Later
-              </button>
+            ))}
+          </div>
+
+          <div className="diff-stage">
+            <div className="diff-summary">
+              <span className="summary-pill added">{diffSummary.added} added</span>
+              <span className="summary-pill modified">{diffSummary.modified} modified</span>
+              <span className="summary-pill deleted">{diffSummary.deleted} deleted</span>
             </div>
+
+            {diffLoading ? (
+              <div className="empty-panel">Loading diff…</div>
+            ) : compareRef === 'current' ? (
+              <div className="empty-panel">Pick a snapshot from the rail to compare against the live draft.</div>
+            ) : visibleDiffBlocks.length === 0 ? (
+              <div className="empty-panel">No visible changes for this selection.</div>
+            ) : (
+              <div className="diff-grid">
+                {visibleDiffBlocks.map((block, index) => (
+                  <div key={`${block.type}-${index}`} className={`diff-row ${block.type}`}>
+                    <div className="diff-pane left">{renderDiffSide(block, 'left')}</div>
+                    <div className="diff-pane right">{renderDiffSide(block, 'right')}</div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
+      </aside>
+
+      {settings.showStatusBar && (
+        <footer className="status-bar">
+          <div className="status-left">
+            {settings.showWordCount && <span>{wordCount} words</span>}
+            {settings.showCharacterCount && <span>{characterCount} chars</span>}
+            {settings.showReadingTime && <span>{readingTimeLabel(wordCount)}</span>}
+            <span>{backups.length} backups</span>
+          </div>
+          <div className="status-right">
+            {notice && <span className="notice-text">{notice}</span>}
+            {error && <span className="error-text">{error}</span>}
+          </div>
+        </footer>
       )}
     </div>
   );
