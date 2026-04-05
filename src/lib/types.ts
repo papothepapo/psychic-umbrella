@@ -15,12 +15,6 @@ export interface SavePoint {
   changeSize: number;
 }
 
-export interface ChangeStats {
-  wordsAdded: number;
-  wordsDeleted: number;
-  paragraphsChanged: number;
-}
-
 export interface DiffResult {
   blocks: DiffBlock[];
 }
@@ -37,37 +31,25 @@ export interface WordDiff {
   text: string;
 }
 
-export interface CommentThread {
-  id: string;
-  paragraphId: string;
-  resolved: boolean;
-  comments: Comment[];
-}
-
-export interface Comment {
-  id: string;
-  author: string;
-  text: string;
+export interface BackupEntry {
+  fileName: string;
+  path: string;
   timestamp: string;
+  kind: 'latest' | 'snapshot' | string;
 }
 
-export interface MergeResult {
-  blocks: MergeBlock[];
-  hasConflicts: boolean;
+export interface ExportedFile {
+  path: string;
+  format: ExportFormat;
 }
 
-export interface MergeBlock {
-  type: 'clean' | 'conflict';
-  content?: string;
-  yours?: string;
-  theirs?: string;
-  blockIndex: number;
+export interface StorageOverview {
+  appRoot: string;
+  backupsDirectory: string;
+  exportsDirectory: string;
 }
 
-export interface ConflictResolution {
-  blockIndex: number;
-  choice: 'yours' | 'theirs' | 'both';
-}
+export type ExportFormat = 'md' | 'txt' | 'inkline' | 'docx';
 
 export interface AppSettings {
   theme: 'light' | 'mist' | 'system';
@@ -76,6 +58,17 @@ export interface AppSettings {
   lineHeight: number;
   editorWidth: number;
   showRuler: boolean;
+  showWordCount: boolean;
+  showCharacterCount: boolean;
+  showReadingTime: boolean;
+  showStatusBar: boolean;
+  showSpellcheck: boolean;
+  focusMode: boolean;
+  highlightMatches: boolean;
   projectsDirectory: string;
+  backupsDirectory: string;
+  exportsDirectory: string;
   autosaveIntervalMs: number;
+  backupIntervalMs: number;
+  defaultExportFormat: ExportFormat;
 }

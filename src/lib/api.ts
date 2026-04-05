@@ -1,14 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
   AppSettings,
-  ChangeStats,
-  Comment,
-  CommentThread,
-  ConflictResolution,
+  BackupEntry,
   DiffResult,
-  MergeResult,
+  ExportFormat,
+  ExportedFile,
   ProjectMeta,
-  SavePoint
+  SavePoint,
+  StorageOverview
 } from './types';
 
 export const api = {
@@ -24,23 +23,15 @@ export const api = {
   getTimeline: (projectId: string) => invoke<SavePoint[]>('get_timeline', { projectId }),
   getDocumentAtSavePoint: (projectId: string, hash: string) =>
     invoke<string>('get_document_at_save_point', { projectId, hash }),
-  getChangeStats: (projectId: string, hash: string) =>
-    invoke<ChangeStats>('get_change_stats', { projectId, hash }),
   computeDiff: (projectId: string, from: string, to: string) =>
     invoke<DiffResult>('compute_diff', { projectId, from, to }),
-  loadComments: (projectId: string) => invoke<CommentThread[]>('load_comments', { projectId }),
-  addComment: (projectId: string, paragraphId: string, text: string) =>
-    invoke<CommentThread>('add_comment', { projectId, paragraphId, text }),
-  replyToComment: (projectId: string, threadId: string, text: string) =>
-    invoke<Comment>('reply_to_comment', { projectId, threadId, text }),
-  resolveThread: (projectId: string, threadId: string) =>
-    invoke<void>('resolve_thread', { projectId, threadId }),
-  deleteThread: (projectId: string, threadId: string) =>
-    invoke<void>('delete_thread', { projectId, threadId }),
-  importAndDiff: (projectId: string, filePath: string) =>
-    invoke<MergeResult>('import_and_diff', { projectId, filePath }),
-  applyMerge: (projectId: string, resolutions: ConflictResolution[]) =>
-    invoke<void>('apply_merge', { projectId, resolutions }),
   getSettings: () => invoke<AppSettings>('get_settings'),
-  updateSettings: (settings: AppSettings) => invoke<void>('update_settings', { settings })
+  updateSettings: (settings: AppSettings) => invoke<void>('update_settings', { settings }),
+  getStorageOverview: () => invoke<StorageOverview>('get_storage_overview'),
+  listBackups: (projectId: string) => invoke<BackupEntry[]>('list_backups', { projectId }),
+  createBackup: (projectId: string) => invoke<BackupEntry>('create_backup', { projectId }),
+  exportProject: (projectId: string, format: ExportFormat) =>
+    invoke<ExportedFile>('export_project', { projectId, format }),
+  importProject: (fileName: string, content: string, contentEncoding?: 'utf8' | 'base64') =>
+    invoke<ProjectMeta>('import_project', { fileName, content, contentEncoding })
 };
