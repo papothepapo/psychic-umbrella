@@ -58,6 +58,7 @@ type ToolbarState = {
   top: number;
   left: number;
 };
+type SystemTheme = 'light' | 'dark';
 
 const BRAND_NAME = 'Inkline';
 const DEFAULT_TITLE = 'Untitled Document';
@@ -108,9 +109,9 @@ const LANGUAGE_OPTIONS = [
 ];
 
 const CANVAS_WIDTHS: Record<PageWidthPreset, number> = {
-  narrow: 560,
-  medium: 720,
-  wide: 900
+  narrow: 760,
+  medium: 980,
+  wide: 1220
 };
 
 const FREQUENCY_TO_MINUTES: Record<Exclude<AutoSnapshotFrequency, 'custom'>, number> = {
@@ -434,6 +435,14 @@ function animationMultiplier(settings: AppSettings) {
   if (settings.animationSpeed === 'slow') return 1.45;
   if (settings.animationSpeed === 'fast') return 0.7;
   return 1;
+}
+
+function getPreferredSystemTheme(): SystemTheme {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return 'light';
+  }
+
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 function getAutoSnapshotMinutes(settings: AppSettings) {
@@ -901,6 +910,7 @@ export function App() {
   const [toolbarFontStep, setToolbarFontStep] = useState(3);
   const [activeParagraphElement, setActiveParagraphElement] = useState<HTMLElement | null>(null);
   const [nowTick, setNowTick] = useState(Date.now());
+  const [systemTheme, setSystemTheme] = useState<SystemTheme>(getPreferredSystemTheme);
 
   const editorRef = useRef<HTMLDivElement | null>(null);
   const leftPaneRef = useRef<HTMLDivElement | null>(null);
@@ -931,15 +941,14 @@ export function App() {
     () => visibleTimeline.find((snapshot) => snapshot.hash === comparisonSnapshotId) ?? null,
     [comparisonSnapshotId, visibleTimeline]
   );
+  const comparisonBaseText = comparisonSnapshot
+    ? snapshotCacheRef.current[comparisonSnapshot.hash]?.text ||
+      (selectedSnapshotId === comparisonSnapshot.hash ? selectedSnapshotPreview?.text : '') ||
+      ''
+    : '';
   const comparisonBlocks = useMemo(
-    () =>
-      comparisonSnapshot
-        ? buildComparisonBlocks(
-            snapshotCacheRef.current[comparisonSnapshot.hash]?.text || selectedSnapshotPreview?.text || '',
-            currentPlainText
-          )
-        : [],
-    [comparisonSnapshot, currentPlainText, selectedSnapshotPreview?.text]
+    () => (comparisonSnapshot ? buildComparisonBlocks(comparisonBaseText, currentPlainText) : []),
+    [comparisonBaseText, comparisonSnapshot, currentPlainText]
   );
 
   const statusIsCurrent = currentPlainText === lastSnapshotTextRef.current;
@@ -949,7 +958,7 @@ export function App() {
       ? Math.min(100, Math.round((wordCount / settings.wordGoalTarget) * 100))
       : 0;
 
-  const shellTheme = settings.followSystemTheme ? 'light' : settings.appTheme;
+  const shellTheme = settings.followSystemTheme ? systemTheme : settings.appTheme;
   const appStyle = {
     '--canvas-width': `${pageWidthToPixels(settings.canvasWidth)}px`,
     '--canvas-font': settings.dyslexiaFriendlyFont ? '"OpenDyslexic", Georgia, serif' : `"${settings.defaultFont}", serif`,
@@ -1007,6 +1016,32 @@ export function App() {
     const timer = window.setInterval(() => setNowTick(Date.now()), 60000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const updateTheme = (event?: MediaQueryListEvent) => {
+      const prefersDark = event ? event.matches : mediaQuery.matches;
+      setSystemTheme(prefersDark ? 'dark' : 'light');
+    };
+
+    updateTheme();
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', updateTheme);
+      return () => mediaQuery.removeEventListener('change', updateTheme);
+    }
+
+    mediaQuery.addListener(updateTheme);
+    return () => mediaQuery.removeListener(updateTheme);
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.style.colorScheme = shellTheme === 'dark' ? 'dark' : 'light';
+  }, [shellTheme]);
 
   useEffect(() => {
     if (!notice) return;
@@ -1230,6 +1265,14 @@ export function App() {
     }
   }, [selectedSnapshotId, snapshotCount, visibleTimeline]);
 
+  useEffect(() => {
+    if (!comparisonSnapshotId || snapshotCacheRef.current[comparisonSnapshotId]) return;
+
+    void loadSnapshotPreview(comparisonSnapshotId).catch((err) => {
+      setError(`Snapshot preview could not be loaded: ${String(err)}`);
+    });
+  }, [comparisonSnapshotId, project]);
+
   async function openProject(nextProject: ProjectMeta, incomingSettings = settings) {
     const [rawDocument, savePoints, backupEntries] = await Promise.all([
       api.loadDocument(nextProject.id),
@@ -1268,10 +1311,6 @@ export function App() {
       lastSnapshotTextRef.current = nextPlainText;
     }
 
-    const normalized = normalizeSettings(incomingSettings);
-    if (normalized.defaultPageWidth !== normalized.canvasWidth) {
-      setSettings((current) => ({ ...current, canvasWidth: current.defaultPageWidth }));
-    }
   }
 
   async function flushDocumentSave() {
@@ -1496,23 +1535,59 @@ export function App() {
     void (async () => {
       try {
         const contents = await file.text();
-        const nextTitle = fileTitleFromName(file.name);
+        const parsed = parseDocument(contents);
+        const nextMeta = { ...parsed.meta };
+        const nextTitle = nextMeta.title || fileTitleFromName(file.name);
+        const nextHtml = normalizeStoredHtml(parsed.body);
+        const nextText = htmlToText(nextHtml);
+        nextMeta.title = nextTitle;
 
         if (settings.importMode === 'newDocument') {
           if (currentPlainText.trim() && !window.confirm('Replace the current document with the imported file?')) {
             return;
           }
 
+          setDocumentMeta(nextMeta);
           setTitle(nextTitle);
-          setDocumentHtml(normalizeStoredHtml(contents));
+          setDocumentHtml(nextHtml);
           setNotice(`Imported ${file.name} into the current document.`);
           return;
         }
 
+        if (!project) {
+          setError('Import failed: there is no active project to attach the snapshot to.');
+          return;
+        }
+
+        const nextDocument = composeDocument(nextMeta, nextTitle, nextHtml);
+
+        await api.saveDocument(project.id, nextDocument);
+        await api.renameProject(project.id, nextTitle);
+
+        const created = await api.createSavePoint(project.id, `Imported — ${file.name}`);
+        snapshotCacheRef.current[created.hash] = {
+          raw: nextDocument,
+          html: nextHtml,
+          text: nextText
+        };
+
+        const nextTimeline = [...timeline, created];
+        setTimeline(nextTimeline);
+        setSelectedSnapshotId(created.hash);
+        setComparisonSnapshotId(created.hash);
+        setSelectedSnapshotPreview(snapshotCacheRef.current[created.hash]);
+        lastSavedDocumentRef.current = nextDocument;
+        lastRenamedTitleRef.current = nextTitle;
+        lastSnapshotTextRef.current = nextText;
+
+        setProject((current) =>
+          current ? { ...current, title: nextTitle, modified: new Date().toISOString() } : current
+        );
+        setMode('edit');
         setTitle(nextTitle);
-        setDocumentHtml(normalizeStoredHtml(contents));
-        await flushDocumentSave();
-        await createSnapshot(`Imported — ${file.name}`, 'manual');
+        setDocumentHtml(nextHtml);
+        setDocumentMeta(nextMeta);
+        setNotice(`Imported ${file.name} as a snapshot.`);
       } catch (err) {
         setError(`Import failed: ${String(err)}`);
       } finally {
@@ -1590,7 +1665,7 @@ export function App() {
 
   return (
     <div
-      className={`inkline-shell theme-${shellTheme} mode-${mode}${settings.highContrastMode ? ' high-contrast' : ''}`}
+      className={`inkline-shell theme-${shellTheme} mode-${mode}${settings.highContrastMode ? ' high-contrast' : ''}${settings.usePatternsInsteadOfColor ? ' comparison-patterns' : ''}`}
       style={appStyle}
     >
       <input
@@ -2012,9 +2087,9 @@ export function App() {
                     </SettingRow>
                     <SettingRow label="Default page width">
                       <select value={settings.defaultPageWidth} onChange={(event) => setSettings((current) => ({ ...current, defaultPageWidth: event.target.value as PageWidthPreset, canvasWidth: event.target.value as PageWidthPreset }))}>
-                        <option value="narrow">Narrow (560px)</option>
-                        <option value="medium">Medium (720px)</option>
-                        <option value="wide">Wide (900px)</option>
+                        <option value="narrow">Narrow (760px)</option>
+                        <option value="medium">Medium (980px)</option>
+                        <option value="wide">Wide (1220px)</option>
                       </select>
                     </SettingRow>
                     <SettingRow label="Language">
@@ -2241,9 +2316,9 @@ export function App() {
                     <h3>Canvas</h3>
                     <SettingRow label="Canvas width">
                       <select value={settings.canvasWidth} onChange={(event) => setSettings((current) => ({ ...current, canvasWidth: event.target.value as PageWidthPreset }))}>
-                        <option value="narrow">Narrow (560px)</option>
-                        <option value="medium">Medium (720px)</option>
-                        <option value="wide">Wide (900px)</option>
+                        <option value="narrow">Narrow (760px)</option>
+                        <option value="medium">Medium (980px)</option>
+                        <option value="wide">Wide (1220px)</option>
                       </select>
                     </SettingRow>
                     <SettingRow label="Canvas shadow">
