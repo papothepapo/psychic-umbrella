@@ -1,22 +1,4 @@
-# Inkline
-
-Inkline is a writing studio that keeps the drafting surface calm while making snapshot comparison a first-class part of the workflow.
-
-## What is currently implemented
-
-- Cross-platform scaffold using Tauri v2 + React + TypeScript.
-- Project creation/listing/renaming/deletion backed by SQLite index (`rusqlite`).
-- Project folder creation in `~/Inkline/<project-id>` with `document.md`, `document.comments.json`, and a hidden Git repo.
-- Autosave to `document.md` after inactivity.
-- Save Point creation through the Rust backend with `git2` commit creation.
-- Dual snapshot timelines for left/right comparison selection.
-- Timeline loading from Git history with change-size metadata.
-- Document-at-save-point loading from commit tree.
-- Side-by-side and unified Changes views with paragraph and line-based comparison modes.
-- Writer-facing ribbon controls for fonts, spacing, page width, and inline formatting helpers.
-- Comment thread persistence in `document.comments.json`.
-- Basic merge import + conflict block generation.
-- Settings persistence in `~/Inkline/.inkline-config.json` with legacy Diff paths migrated forward when present.
+Inkline is a writing app that makes snapshot comparison easy. no more v1.tx v1.2.txt v1.5.6FINAL.txt v2actualfinal.txt!
 
 ## Development
 
@@ -38,7 +20,7 @@ GitHub Actions workflow is included to build artifacts for:
 - Linux
 - macOS
 
-The workflow uploads build artifacts for each OS run.
+The workflow uploads build artifacts for each OS run. fork and build if you want an executable
 
 ## Notes
 
