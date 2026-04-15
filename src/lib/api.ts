@@ -32,6 +32,8 @@ export const api = {
   createBackup: (projectId: string) => invoke<BackupEntry>('create_backup', { projectId }),
   exportProject: (projectId: string, format: ExportFormat) =>
     invoke<ExportedFile>('export_project', { projectId, format }),
+  exportProjectToPath: (projectId: string, format: ExportFormat, outputPath: string) =>
+    invoke<ExportedFile>('export_project_to_path', { projectId, format, outputPath }),
   importProject: (fileName: string, content: string, contentEncoding?: 'utf8' | 'base64') =>
     invoke<ProjectMeta>('import_project', { fileName, content, contentEncoding })
 };

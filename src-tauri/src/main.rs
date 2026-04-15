@@ -648,6 +648,121 @@ fn markdown_body(markdown: &str) -> &str {
     markdown
 }
 
+fn decode_html_entity(entity: &str) -> Option<String> {
+    match entity {
+        "amp" => Some("&".into()),
+        "lt" => Some("<".into()),
+        "gt" => Some(">".into()),
+        "quot" => Some("\"".into()),
+        "apos" => Some("'".into()),
+        "nbsp" => Some(" ".into()),
+        _ if entity.starts_with("#x") || entity.starts_with("#X") => u32::from_str_radix(&entity[2..], 16)
+            .ok()
+            .and_then(char::from_u32)
+            .map(|ch| ch.to_string()),
+        _ if entity.starts_with('#') => entity[1..]
+            .parse::<u32>()
+            .ok()
+            .and_then(char::from_u32)
+            .map(|ch| ch.to_string()),
+        _ => None,
+    }
+}
+
+fn decode_html_entities(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '&' {
+            output.push(ch);
+            continue;
+        }
+
+        let mut entity = String::new();
+        while let Some(next) = chars.peek().copied() {
+            chars.next();
+            if next == ';' {
+                break;
+            }
+            entity.push(next);
+            if entity.len() > 12 {
+                break;
+            }
+        }
+
+        if let Some(decoded) = decode_html_entity(&entity) {
+            output.push_str(&decoded);
+        } else {
+            output.push('&');
+            output.push_str(&entity);
+            if entity.len() <= 12 {
+                output.push(';');
+            }
+        }
+    }
+
+    output
+}
+
+fn html_body_to_plain_text(html: &str) -> String {
+    let mut prepared = html
+        .replace("\r\n", "\n")
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n");
+
+    for tag in [
+        "p",
+        "div",
+        "li",
+        "blockquote",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+    ] {
+        prepared = prepared.replace(&format!("</{tag}>"), "\n\n");
+        prepared = prepared.replace(&format!("</{tag} >"), "\n\n");
+    }
+
+    let mut output = String::with_capacity(prepared.len());
+    let mut inside_tag = false;
+
+    for ch in prepared.chars() {
+        match ch {
+            '<' => inside_tag = true,
+            '>' => inside_tag = false,
+            _ if !inside_tag => output.push(ch),
+            _ => {}
+        }
+    }
+
+    let mut cleaned = decode_html_entities(&output)
+        .replace('\u{00a0}', " ")
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    while cleaned.contains("\n\n\n") {
+        cleaned = cleaned.replace("\n\n\n", "\n\n");
+    }
+
+    cleaned.trim().to_string()
+}
+
+fn document_plain_text(document: &str) -> String {
+    let body = markdown_body(document);
+    if body.contains('<') && body.contains('>') {
+        html_body_to_plain_text(body)
+    } else {
+        decode_html_entities(body).trim().to_string()
+    }
+}
+
 fn extract_frontmatter(markdown: &str) -> (HashMap<String, String>, String) {
     if !markdown.starts_with("---\n") {
         return (HashMap::new(), markdown.to_string());
@@ -1104,11 +1219,11 @@ fn xml_escape(value: &str) -> String {
 }
 
 fn markdown_to_docx_bytes(markdown: &str, title: &str) -> Result<Vec<u8>, String> {
-    let body = markdown_body(markdown);
+    let body = document_plain_text(markdown);
     let paragraphs = if body.trim().is_empty() {
         vec![String::new()]
     } else {
-        split_blocks(body)
+        split_blocks(&body)
     };
 
     let body_xml = paragraphs
@@ -2088,37 +2203,72 @@ fn create_backup(project_id: String) -> Result<BackupEntry, String> {
     create_backup_snapshot(&project_id, &title, &content, true)
 }
 
-#[tauri::command]
-fn export_project(project_id: String, format: String) -> Result<ExportedFile, String> {
-    ensure_project_exists(&project_id)?;
-    ensure_app_ready()?;
-
-    let normalized_format = match format.as_str() {
+fn normalized_export_format(format: String) -> String {
+    match format.as_str() {
         "md" | "txt" | "inkline" | "docx" => format,
         _ => "inkline".into(),
-    };
+    }
+}
 
-    let title = current_project_title(&project_id)?;
+fn export_extension(format: &str) -> &str {
+    match format {
+        "md" => "md",
+        "txt" => "txt",
+        "docx" => "docx",
+        _ => "inkline",
+    }
+}
+
+fn export_path_with_extension(path: PathBuf, format: &str) -> PathBuf {
+    let expected = export_extension(format);
+    if path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|extension| extension.eq_ignore_ascii_case(expected))
+        .unwrap_or(false)
+    {
+        path
+    } else {
+        path.with_extension(expected)
+    }
+}
+
+fn write_project_export(project_id: &str, format: String, output_path: Option<String>) -> Result<ExportedFile, String> {
+    ensure_project_exists(project_id)?;
+    ensure_app_ready()?;
+
+    let normalized_format = normalized_export_format(format);
+    let title = current_project_title(project_id)?;
     let slug = sanitize_file_stem(&title);
     let stamp = Utc::now().format("%Y%m%d-%H%M%S");
-    let document = fs::read_to_string(document_path(&project_id)).map_err(|e| e.to_string())?;
+    let document = fs::read_to_string(document_path(project_id)).map_err(|e| e.to_string())?;
 
-    let path = match normalized_format.as_str() {
-        "md" => exports_root().join(format!("{slug}-{stamp}.md")),
-        "txt" => exports_root().join(format!("{slug}-{stamp}.txt")),
-        "docx" => exports_root().join(format!("{slug}-{stamp}.docx")),
-        _ => exports_root().join(format!("{slug}-{stamp}.inkline")),
+    let path = if let Some(output_path) = output_path {
+        let requested = PathBuf::from(output_path.trim());
+        if requested.as_os_str().is_empty() {
+            exports_root().join(format!("{slug}-{stamp}.{}", export_extension(&normalized_format)))
+        } else if requested.is_dir() {
+            requested.join(format!("{slug}-{stamp}.{}", export_extension(&normalized_format)))
+        } else {
+            export_path_with_extension(requested, &normalized_format)
+        }
+    } else {
+        exports_root().join(format!("{slug}-{stamp}.{}", export_extension(&normalized_format)))
     };
+
+    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
 
     match normalized_format.as_str() {
         "md" => atomic_write(&path, &document)?,
-        "txt" => atomic_write(&path, markdown_body(&document))?,
+        "txt" => atomic_write(&path, &document_plain_text(&document))?,
         "docx" => {
             let bytes = markdown_to_docx_bytes(&document, &title)?;
             atomic_write_bytes(&path, &bytes)?;
         }
         _ => {
-            let bundle = project_bundle(&project_id)?;
+            let bundle = project_bundle(project_id)?;
             let content = serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())?;
             atomic_write(&path, &content)?;
         }
@@ -2128,6 +2278,20 @@ fn export_project(project_id: String, format: String) -> Result<ExportedFile, St
         path: path.to_string_lossy().to_string(),
         format: normalized_format,
     })
+}
+
+#[tauri::command]
+fn export_project(project_id: String, format: String) -> Result<ExportedFile, String> {
+    write_project_export(&project_id, format, None)
+}
+
+#[tauri::command]
+fn export_project_to_path(
+    project_id: String,
+    format: String,
+    output_path: String,
+) -> Result<ExportedFile, String> {
+    write_project_export(&project_id, format, Some(output_path))
 }
 
 #[tauri::command]
@@ -2190,6 +2354,7 @@ fn main() {
             list_backups,
             create_backup,
             export_project,
+            export_project_to_path,
             import_project
         ])
         .run(tauri::generate_context!())

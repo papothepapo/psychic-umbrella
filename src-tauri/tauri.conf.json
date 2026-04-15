@@ -20,7 +20,12 @@
     ]
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "publisher": "Inkline",
+    "copyright": "Copyright (c) 2026 Inkline",
+    "category": "Productivity",
+    "shortDescription": "A snapshot-first writing studio.",
+    "longDescription": "Inkline is a writing app for drafting, snapshotting, comparing, and exporting long-form work.",
     "icon": [
       "icons/icon-32.png",
       "icons/icon-128.png",
