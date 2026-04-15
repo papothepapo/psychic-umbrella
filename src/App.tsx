@@ -59,6 +59,10 @@ type ToolbarState = {
   left: number;
 };
 type SystemTheme = 'light' | 'dark';
+type InlineFormatCommand = 'bold' | 'italic' | 'underline' | 'strikeThrough';
+type ActiveFormats = Record<InlineFormatCommand, boolean> & {
+  highlightColor: string | null;
+};
 
 const BRAND_NAME = 'Inkline';
 const DEFAULT_TITLE = 'Untitled Document';
@@ -135,6 +139,23 @@ const ALIGNMENT_OPTIONS: Array<{ value: TextAlignment; label: string }> = [
   { value: 'right', label: 'Right' },
   { value: 'justify', label: 'Justify' }
 ];
+
+const INLINE_FORMATS: Array<{ command: InlineFormatCommand; label: string; title: string }> = [
+  { command: 'bold', label: 'B', title: 'Bold' },
+  { command: 'italic', label: 'I', title: 'Italic' },
+  { command: 'underline', label: 'U', title: 'Underline' },
+  { command: 'strikeThrough', label: 'S', title: 'Strikethrough' }
+];
+
+const HIGHLIGHT_COLORS = ['#FDE68A', '#BFDBFE', '#DDD6FE'];
+const EXPORT_FORMATS: ExportFormat[] = ['pdf', 'docx', 'txt', 'md', 'inkline'];
+const EMPTY_ACTIVE_FORMATS: ActiveFormats = {
+  bold: false,
+  italic: false,
+  underline: false,
+  strikeThrough: false,
+  highlightColor: null
+};
 
 const DEFAULT_SETTINGS: AppSettings = {
   appTheme: 'light',
@@ -317,6 +338,29 @@ function escapeHtml(value: string) {
     .replace(/'/g, '&#39;');
 }
 
+function normalizeColorValue(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === 'transparent' || trimmed === 'rgba(0, 0, 0, 0)') {
+    return null;
+  }
+
+  if (trimmed.startsWith('#')) {
+    return trimmed.length === 4
+      ? `#${trimmed[1]}${trimmed[1]}${trimmed[2]}${trimmed[2]}${trimmed[3]}${trimmed[3]}`.toUpperCase()
+      : trimmed.toUpperCase();
+  }
+
+  const rgb = trimmed.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+  if (!rgb) {
+    return null;
+  }
+
+  return `#${[rgb[1], rgb[2], rgb[3]]
+    .map((part) => Number(part).toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase()}`;
+}
+
 function textToHtml(text: string) {
   const paragraphs = text
     .replace(/\r\n/g, '\n')
@@ -469,13 +513,13 @@ function manualSnapshotLabel(name: string) {
 
 function normalizeEditorHtml(html: string) {
   const normalized = html
-    .replace(/<div><br><\/div>/gi, '')
+    .replace(/<div><br><\/div>/gi, '<p><br></p>')
     .replace(/<div>/gi, '<p>')
     .replace(/<\/div>/gi, '</p>')
-    .replace(/<p><\/p>/gi, '')
+    .replace(/<p>(\s|&nbsp;)*<\/p>/gi, '<p><br></p>')
     .trim();
 
-  return htmlToText(normalized).trim() ? normalized : '';
+  return htmlToText(normalized).trim() || /<br\s*\/?>/i.test(normalized) ? normalized : '';
 }
 
 function tokenizeForInlineDiff(text: string) {
@@ -791,17 +835,49 @@ function downloadTextFile(name: string, content: string, format: ExportFormat) {
   URL.revokeObjectURL(url);
 }
 
+function sanitizeExportName(value: string) {
+  const cleaned = value
+    .trim()
+    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  return cleaned || 'inkline-export';
+}
+
+function joinExportPath(directory: string, fileName: string) {
+  if (!directory.trim()) return fileName;
+  const separator = directory.includes('\\') ? '\\' : '/';
+  return `${directory.replace(/[\\/]+$/, '')}${separator}${fileName}`;
+}
+
+function buildDefaultExportPath(storage: StorageOverview | null, title: string, format: ExportFormat) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const fileName = `${sanitizeExportName(title || DEFAULT_TITLE)}-${stamp}.${exportFormatExtension(format)}`;
+  return joinExportPath(storage?.exportsDirectory ?? '', fileName);
+}
+
 function EditorToolbarButton({
   label,
+  title,
   onClick,
   active = false
 }: {
   label: string;
+  title?: string;
   onClick: () => void;
   active?: boolean;
 }) {
   return (
-    <button type="button" className={`toolbar-button${active ? ' active' : ''}`} onMouseDown={(event) => event.preventDefault()} onClick={onClick}>
+    <button
+      type="button"
+      className={`toolbar-button${active ? ' active' : ''}`}
+      aria-pressed={active}
+      title={title ?? label}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onClick}
+    >
       {label}
     </button>
   );
@@ -891,6 +967,7 @@ export function App() {
   const [saveState, setSaveState] = useState<SaveState>('ready');
   const [mode, setMode] = useState<AppMode>('writing');
   const [project, setProject] = useState<ProjectMeta | null>(null);
+  const [projects, setProjects] = useState<ProjectMeta[]>([]);
   const [documentMeta, setDocumentMeta] = useState<Record<string, string>>({});
   const [title, setTitle] = useState(DEFAULT_TITLE);
   const [documentHtml, setDocumentHtml] = useState('');
@@ -908,6 +985,7 @@ export function App() {
   const [syncScroll, setSyncScroll] = useState(false);
   const [toolbar, setToolbar] = useState<ToolbarState>({ visible: false, top: 0, left: 0 });
   const [toolbarFontStep, setToolbarFontStep] = useState(3);
+  const [activeFormats, setActiveFormats] = useState<ActiveFormats>(EMPTY_ACTIVE_FORMATS);
   const [activeParagraphElement, setActiveParagraphElement] = useState<HTMLElement | null>(null);
   const [nowTick, setNowTick] = useState(Date.now());
   const [systemTheme, setSystemTheme] = useState<SystemTheme>(getPreferredSystemTheme);
@@ -923,6 +1001,7 @@ export function App() {
   const lastSavedSettingsRef = useRef(JSON.stringify(DEFAULT_SETTINGS));
   const lastRenamedTitleRef = useRef(DEFAULT_TITLE);
   const lastSnapshotTextRef = useRef('');
+  const selectionRangeRef = useRef<Range | null>(null);
 
   const currentPlainText = useMemo(() => htmlToText(documentHtml), [documentHtml]);
   const wordCount = useMemo(() => countWords(currentPlainText), [currentPlainText]);
@@ -991,10 +1070,14 @@ export function App() {
         setSettings(nextSettings);
         lastSavedSettingsRef.current = JSON.stringify(nextSettings);
         setStorage(storageOverview);
+        setProjects(projects);
 
         const activeProject = projects[0] ?? (await api.createProject(DEFAULT_TITLE));
         if (cancelled) return;
 
+        if (projects.length === 0) {
+          setProjects([activeProject]);
+        }
         await openProject(activeProject, nextSettings);
       } catch (err) {
         if (!cancelled) {
@@ -1118,7 +1201,9 @@ export function App() {
       void api
         .renameProject(project.id, nextTitle)
         .then(() => {
-          setProject((current) => (current ? { ...current, title: nextTitle, modified: new Date().toISOString() } : current));
+          const modified = new Date().toISOString();
+          setProject((current) => (current ? { ...current, title: nextTitle, modified } : current));
+          updateProjectInList(project.id, { title: nextTitle, modified });
           lastRenamedTitleRef.current = nextTitle;
         })
         .catch((err) => setError(`Title update failed: ${String(err)}`));
@@ -1143,13 +1228,24 @@ export function App() {
       const selection = window.getSelection();
       const editor = editorRef.current;
 
-      if (!selection || selection.rangeCount === 0 || selection.isCollapsed || !editor) {
+      if (!selection || selection.rangeCount === 0 || !editor) {
         setToolbar((current) => ({ ...current, visible: false }));
+        setActiveFormats(EMPTY_ACTIVE_FORMATS);
         return;
       }
 
       const range = selection.getRangeAt(0);
       if (!editor.contains(range.commonAncestorContainer)) {
+        setToolbar((current) => ({ ...current, visible: false }));
+        setActiveFormats(EMPTY_ACTIVE_FORMATS);
+        return;
+      }
+
+      selectionRangeRef.current = range.cloneRange();
+      refreshActiveFormats();
+      updateActiveParagraph();
+
+      if (selection.isCollapsed) {
         setToolbar((current) => ({ ...current, visible: false }));
         return;
       }
@@ -1160,7 +1256,6 @@ export function App() {
         top: rect.top + window.scrollY - 50,
         left: rect.left + window.scrollX + rect.width / 2
       });
-      updateActiveParagraph();
     }
 
     document.addEventListener('selectionchange', handleSelectionChange);
@@ -1295,13 +1390,21 @@ export function App() {
     setTimeline(savePoints);
     setBackups(backupEntries);
     setMode('writing');
+    setToolbar((current) => ({ ...current, visible: false }));
+    setActiveFormats(EMPTY_ACTIVE_FORMATS);
     setSelectedSnapshotId(savePoints[savePoints.length - 1]?.hash ?? null);
     setComparisonSnapshotId(savePoints[savePoints.length - 1]?.hash ?? null);
     setSelectedSnapshotPreview(null);
     snapshotCacheRef.current = {};
+    selectionRangeRef.current = null;
     lastSavedDocumentRef.current = rawDocument;
     lastRenamedTitleRef.current = parsed.meta.title || nextProject.title || DEFAULT_TITLE;
     lastSnapshotTextRef.current = nextPlainText;
+    setProjects((current) =>
+      current.some((item) => item.id === nextProject.id)
+        ? current.map((item) => (item.id === nextProject.id ? nextProject : item))
+        : [nextProject, ...current]
+    );
 
     const latest = savePoints[savePoints.length - 1];
     if (latest) {
@@ -1316,15 +1419,23 @@ export function App() {
   async function flushDocumentSave() {
     if (!project) return;
 
+    const nextTitle = title.trim() || DEFAULT_TITLE;
     const nextDocument = composeDocument(documentMeta, title, documentHtml);
-    if (nextDocument === lastSavedDocumentRef.current) return;
+    const titleChanged = nextTitle !== lastRenamedTitleRef.current;
+    if (nextDocument === lastSavedDocumentRef.current && !titleChanged) return;
 
     try {
       setSaveState('saving');
+      if (titleChanged) {
+        await api.renameProject(project.id, nextTitle);
+        lastRenamedTitleRef.current = nextTitle;
+      }
       await api.saveDocument(project.id, nextDocument);
       lastSavedDocumentRef.current = nextDocument;
       setSaveState('saved');
-      setProject((current) => (current ? { ...current, modified: new Date().toISOString() } : current));
+      const modified = new Date().toISOString();
+      setProject((current) => (current ? { ...current, title: nextTitle, modified } : current));
+      updateProjectInList(project.id, { title: nextTitle, modified });
     } catch (err) {
       setSaveState('error');
       setError(`Document could not be saved: ${String(err)}`);
@@ -1389,11 +1500,218 @@ export function App() {
     }
   }
 
+  function updateProjectInList(projectId: string, updates: Partial<ProjectMeta>) {
+    setProjects((current) =>
+      current
+        .map((item) => (item.id === projectId ? { ...item, ...updates } : item))
+        .sort((left, right) => new Date(right.modified).getTime() - new Date(left.modified).getTime())
+    );
+  }
+
+  async function handleProjectChange(projectId: string) {
+    if (!projectId || projectId === project?.id) return;
+
+    const nextProject = projects.find((item) => item.id === projectId);
+    if (!nextProject) return;
+
+    try {
+      await flushDocumentSave();
+      await openProject(nextProject);
+      setNotice(`Opened "${nextProject.title}".`);
+    } catch (err) {
+      setError(`Project could not be opened: ${String(err)}`);
+    }
+  }
+
+  async function handleCreateProject() {
+    const name = window.prompt('Name the new project:', DEFAULT_TITLE);
+    if (name === null) return;
+
+    try {
+      await flushDocumentSave();
+      const created = await api.createProject(name.trim() || DEFAULT_TITLE);
+      setProjects((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+      await openProject(created);
+      setNotice(`Created "${created.title}".`);
+    } catch (err) {
+      setError(`Project could not be created: ${String(err)}`);
+    }
+  }
+
+  function selectionBelongsToEditor(range: Range) {
+    const editor = editorRef.current;
+    return !!editor && editor.contains(range.commonAncestorContainer);
+  }
+
+  function rememberEditorSelection() {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
+    if (!selectionBelongsToEditor(range)) return;
+
+    selectionRangeRef.current = range.cloneRange();
+  }
+
+  function restoreEditorSelection() {
+    const editor = editorRef.current;
+    if (!editor) return false;
+
+    editor.focus({ preventScroll: true });
+
+    const range = selectionRangeRef.current;
+    const selection = window.getSelection();
+    if (!range || !selection || !selectionBelongsToEditor(range)) {
+      if (selection) {
+        const fallback = document.createRange();
+        fallback.selectNodeContents(editor);
+        fallback.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(fallback);
+        selectionRangeRef.current = fallback.cloneRange();
+        return true;
+      }
+      return false;
+    }
+
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
+  }
+
+  function readActiveFormats(): ActiveFormats {
+    const selection = window.getSelection();
+    const editor = editorRef.current;
+    if (!selection || selection.rangeCount === 0 || !editor || !selectionBelongsToEditor(selection.getRangeAt(0))) {
+      return EMPTY_ACTIVE_FORMATS;
+    }
+
+    return {
+      bold: document.queryCommandState('bold'),
+      italic: document.queryCommandState('italic'),
+      underline: document.queryCommandState('underline'),
+      strikeThrough: document.queryCommandState('strikeThrough'),
+      highlightColor: normalizeColorValue(String(document.queryCommandValue('hiliteColor') || ''))
+    };
+  }
+
+  function refreshActiveFormats() {
+    setActiveFormats(readActiveFormats());
+  }
+
+  function editorBlockForSelection(range: Range) {
+    const editor = editorRef.current;
+    if (!editor) return null;
+
+    const node = range.startContainer;
+    const element = node instanceof HTMLElement ? node : node.parentElement;
+    const block = element?.closest('p, div, li, blockquote') as HTMLElement | null;
+
+    return block && editor.contains(block) ? block : null;
+  }
+
+  function appendCaretBreakWithFormatting(parent: HTMLElement) {
+    const formats = readActiveFormats();
+    let container: HTMLElement = parent;
+
+    const wrappers: Array<[boolean, keyof HTMLElementTagNameMap]> = [
+      [formats.bold, 'strong'],
+      [formats.italic, 'em'],
+      [formats.underline, 'u'],
+      [formats.strikeThrough, 's']
+    ];
+
+    wrappers.forEach(([enabled, tagName]) => {
+      if (!enabled) return;
+      const wrapper = document.createElement(tagName);
+      container.appendChild(wrapper);
+      container = wrapper;
+    });
+
+    if (formats.highlightColor) {
+      const highlight = document.createElement('span');
+      highlight.style.backgroundColor = formats.highlightColor;
+      container.appendChild(highlight);
+      container = highlight;
+    }
+
+    const marker = document.createElement('br');
+    container.appendChild(marker);
+    return { container, marker };
+  }
+
+  function placeCaret(container: Node, offset: number) {
+    const selection = window.getSelection();
+    if (!selection) return;
+
+    const range = document.createRange();
+    range.setStart(container, offset);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    rememberEditorSelection();
+    refreshActiveFormats();
+  }
+
+  function ensureEditableBlockContent(block: HTMLElement) {
+    if (block.textContent || block.querySelector('img, br')) return;
+    block.appendChild(document.createElement('br'));
+  }
+
+  function insertParagraphBreak() {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    restoreEditorSelection();
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+
+    const range = selection.getRangeAt(0);
+    if (!selectionBelongsToEditor(range)) return;
+
+    if (!range.collapsed) {
+      range.deleteContents();
+    }
+
+    const block = editorBlockForSelection(range);
+    if (!block || block === editor) {
+      const paragraph = document.createElement('p');
+      const { container, marker } = appendCaretBreakWithFormatting(paragraph);
+      editor.appendChild(paragraph);
+      placeCaret(container, Array.from(container.childNodes).indexOf(marker));
+      updateEditorFromDom();
+      return;
+    }
+
+    const nextBlock = document.createElement(block.tagName.toLowerCase() === 'li' ? 'li' : 'p');
+    const afterRange = range.cloneRange();
+    afterRange.selectNodeContents(block);
+    afterRange.setStart(range.startContainer, range.startOffset);
+    const trailing = afterRange.extractContents();
+
+    ensureEditableBlockContent(block);
+
+    if (trailing.textContent || trailing.childNodes.length > 0) {
+      nextBlock.appendChild(trailing);
+      block.insertAdjacentElement('afterend', nextBlock);
+      placeCaret(nextBlock, 0);
+    } else {
+      const { container, marker } = appendCaretBreakWithFormatting(nextBlock);
+      block.insertAdjacentElement('afterend', nextBlock);
+      placeCaret(container, Array.from(container.childNodes).indexOf(marker));
+    }
+
+    updateEditorFromDom();
+  }
+
   function updateEditorFromDom() {
     const editor = editorRef.current;
     if (!editor) return;
     const nextHtml = normalizeEditorHtml(editor.innerHTML);
     setDocumentHtml(nextHtml);
+    rememberEditorSelection();
+    refreshActiveFormats();
     updateActiveParagraph();
   }
 
@@ -1417,7 +1735,7 @@ export function App() {
   }
 
   function applyEditorCommand(command: string, value?: string) {
-    editorRef.current?.focus();
+    restoreEditorSelection();
     document.execCommand('styleWithCSS', false, 'true');
     document.execCommand(command, false, value);
     updateEditorFromDom();
@@ -1432,19 +1750,36 @@ export function App() {
   function handleEditorKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const modifier = event.metaKey || event.ctrlKey;
 
+    if (event.key === 'Enter' && !event.shiftKey && !modifier) {
+      event.preventDefault();
+      insertParagraphBreak();
+      return;
+    }
+
+    if (event.key === 'Enter' && event.shiftKey) {
+      event.preventDefault();
+      restoreEditorSelection();
+      document.execCommand('insertLineBreak');
+      updateEditorFromDom();
+      return;
+    }
+
     if (modifier && event.key.toLowerCase() === 'b') {
       event.preventDefault();
       applyEditorCommand('bold');
+      return;
     }
 
     if (modifier && event.key.toLowerCase() === 'i') {
       event.preventDefault();
       applyEditorCommand('italic');
+      return;
     }
 
     if (modifier && event.key.toLowerCase() === 'u') {
       event.preventDefault();
       applyEditorCommand('underline');
+      return;
     }
 
     if (settings.smartQuotes && event.key === '"') {
@@ -1508,8 +1843,12 @@ export function App() {
       return;
     }
 
+    const suggestedPath = buildDefaultExportPath(storage, title, format);
+    const outputPath = window.prompt('Export to:', suggestedPath);
+    if (outputPath === null) return;
+
     void flushDocumentSave()
-      .then(() => api.exportProject(project.id, format))
+      .then(() => api.exportProjectToPath(project.id, format, outputPath.trim() || suggestedPath))
       .then((exported) => setNotice(`Exported ${exported.format.toUpperCase()} to ${exported.path}`))
       .catch((err) => setError(`Export failed: ${String(err)}`));
   }
@@ -1652,6 +1991,71 @@ export function App() {
     settings.showWordGoal ? buildWordGoalLabel(wordCount, settings.wordGoalTarget, settings.wordGoalDisplay) : null
   ].filter(Boolean) as string[];
 
+  function renderComparisonDocument(compact = false) {
+    return (
+      <div className={`comparison-document visible${compact ? ' compact' : ''}`}>
+        {comparisonBlocks.length === 0 ? <p className="empty-comparison">No changes to compare yet.</p> : null}
+        {comparisonBlocks.map((block) => (
+          <p key={block.id} className={`comparison-paragraph block-${block.type}`}>
+            {block.type === 'added' ? (
+              <span className="token added-token token-run">
+                {block.currentText}
+                <button type="button" className="token-action remove" onClick={() => handleComparisonAction(block.id, null, 'remove')}>
+                  Remove
+                </button>
+              </span>
+            ) : block.type === 'deleted' ? (
+              <span className="token deleted-token token-run">
+                {block.baseText}
+                <button type="button" className="token-action restore" onClick={() => handleComparisonAction(block.id, null, 'restore')}>
+                  Restore
+                </button>
+              </span>
+            ) : block.type === 'unchanged' ? (
+              <span>{block.currentText}</span>
+            ) : (
+              block.ops.map((op) =>
+                op.type === 'equal' ? (
+                  <span key={op.id}>{op.text}</span>
+                ) : (
+                  <span key={op.id} className={`token token-run ${op.type === 'insert' ? 'added-token' : 'deleted-token'}`}>
+                    {op.text}
+                    <button
+                      type="button"
+                      className={`token-action ${op.type === 'insert' ? 'remove' : 'restore'}`}
+                      onClick={() => handleComparisonAction(block.id, op.id, op.type === 'insert' ? 'remove' : 'restore')}
+                    >
+                      {op.type === 'insert' ? 'Remove' : 'Restore'}
+                    </button>
+                  </span>
+                )
+              )
+            )}
+          </p>
+        ))}
+      </div>
+    );
+  }
+
+  const activeFormatControls = [
+    ...INLINE_FORMATS.filter((format) => activeFormats[format.command]).map((format) => ({
+      key: format.command,
+      label: format.label,
+      title: `Turn off ${format.title}`,
+      onClick: () => applyEditorCommand(format.command)
+    })),
+    ...(activeFormats.highlightColor
+      ? [
+          {
+            key: 'highlight',
+            label: 'A',
+            title: 'Turn off highlight',
+            onClick: () => applyEditorCommand('hiliteColor', 'transparent')
+          }
+        ]
+      : [])
+  ];
+
   if (loading) {
     return (
       <div className="loading-screen">
@@ -1680,6 +2084,22 @@ export function App() {
         <div className="top-bar-left">
           <div className="brand-wordmark">{BRAND_NAME}</div>
           <div className="top-bar-divider" />
+          <select
+            className="project-select"
+            value={project?.id ?? ''}
+            aria-label="Current project"
+            onChange={(event) => void handleProjectChange(event.target.value)}
+          >
+            {projects.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.title}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="icon-action compact" aria-label="Create project" onClick={() => void handleCreateProject()}>
+            +
+          </button>
+          <div className="top-bar-divider" />
           <input
             className="document-title-input"
             value={title}
@@ -1691,6 +2111,27 @@ export function App() {
         </div>
 
         <div className="top-bar-right">
+          <div className="quick-export-control">
+            <select
+              value={settings.defaultExportFormat}
+              aria-label="Export format"
+              onChange={(event) =>
+                setSettings((current) => ({
+                  ...current,
+                  defaultExportFormat: event.target.value as DefaultExportFormat
+                }))
+              }
+            >
+              {EXPORT_FORMATS.map((format) => (
+                <option key={format} value={format}>
+                  {format.toUpperCase()}
+                </option>
+              ))}
+            </select>
+            <button type="button" className="ghost-action" onClick={() => handleExportCurrent(settings.defaultExportFormat)}>
+              Export
+            </button>
+          </div>
           <button type="button" className="ghost-action" onClick={() => setSaveSnapshotOpen(true)}>
             <span className="icon-only">◉</span>
             <span className="responsive-label">Save Snapshot</span>
@@ -1734,55 +2175,28 @@ export function App() {
             <div
               className={`canvas-paper${settings.canvasShadow ? ' with-shadow' : ''}${mode === 'comparison' ? ' comparison-paper' : ''}`}
             >
-              {mode === 'comparison' && comparisonSnapshot ? (
-                <div className={`comparison-document${mode === 'comparison' ? ' visible' : ''}`}>
-                  {comparisonBlocks.length === 0 ? <p className="empty-comparison">No changes to compare yet.</p> : null}
-                  {comparisonBlocks.map((block) => (
-                    <p key={block.id} className={`comparison-paragraph block-${block.type}`}>
-                      {block.type === 'added' ? (
-                        <span className="token added-token token-run">
-                          {block.currentText}
-                          <button type="button" className="token-action remove" onClick={() => handleComparisonAction(block.id, null, 'remove')}>
-                            Remove
-                          </button>
-                        </span>
-                      ) : block.type === 'deleted' ? (
-                        <span className="token deleted-token token-run">
-                          {block.baseText}
-                          <button type="button" className="token-action restore" onClick={() => handleComparisonAction(block.id, null, 'restore')}>
-                            Restore
-                          </button>
-                        </span>
-                      ) : block.type === 'unchanged' ? (
-                        <span>{block.currentText}</span>
-                      ) : (
-                        block.ops.map((op) =>
-                          op.type === 'equal' ? (
-                            <span key={op.id}>{op.text}</span>
-                          ) : (
-                            <span
-                              key={op.id}
-                              className={`token token-run ${op.type === 'insert' ? 'added-token' : 'deleted-token'}`}
-                            >
-                              {op.text}
-                              <button
-                                type="button"
-                                className={`token-action ${op.type === 'insert' ? 'remove' : 'restore'}`}
-                                onClick={() => handleComparisonAction(block.id, op.id, op.type === 'insert' ? 'remove' : 'restore')}
-                              >
-                                {op.type === 'insert' ? 'Remove' : 'Restore'}
-                              </button>
-                            </span>
-                          )
-                        )
-                      )}
-                    </p>
+              {mode !== 'comparison' && activeFormatControls.length > 0 ? (
+                <div className="active-format-strip">
+                  {activeFormatControls.map((format) => (
+                    <button
+                      key={format.key}
+                      type="button"
+                      className="active-format-chip"
+                      title={format.title}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={format.onClick}
+                    >
+                      {format.label}
+                    </button>
                   ))}
                 </div>
+              ) : null}
+              {mode === 'comparison' && comparisonSnapshot ? (
+                renderComparisonDocument()
               ) : (
                 <div
                   ref={editorRef}
-                  className={`editor-body align-${settings.defaultTextAlignment}${settings.showFormattingMarks ? ' show-formatting-marks' : ''}${settings.focusMode ? ' focus-mode' : ''}${settings.highlightCurrentLine || settings.lineFocusHighlight ? ' highlight-current-line' : ''}${settings.cursorBlink ? '' : ' no-cursor-blink'}`}
+                  className={`editor-body align-${settings.defaultTextAlignment} cursor-${settings.cursorStyle}${settings.showFormattingMarks ? ' show-formatting-marks' : ''}${settings.focusMode ? ' focus-mode' : ''}${settings.highlightCurrentLine || settings.lineFocusHighlight ? ' highlight-current-line' : ''}${settings.cursorBlink ? '' : ' no-cursor-blink'}`}
                   contentEditable
                   spellCheck={settings.spellCheck}
                   suppressContentEditableWarning
@@ -1791,8 +2205,8 @@ export function App() {
                   onInput={updateEditorFromDom}
                   onKeyDown={handleEditorKeyDown}
                   onPaste={handleEditorPaste}
-                  onClick={updateActiveParagraph}
-                  onKeyUp={updateActiveParagraph}
+                  onClick={updateEditorFromDom}
+                  onKeyUp={updateEditorFromDom}
                   style={{
                     textAlign: settings.defaultTextAlignment,
                     paddingBottom: settings.paragraphIndentStyle === 'block' ? 80 : 80
@@ -1854,18 +2268,20 @@ export function App() {
                       ? `${selectedSnapshot.message} — ${formatDateTime(selectedSnapshot.timestamp)}`
                       : 'Select a snapshot from the timeline'}
                   </div>
-                  <button type="button" className={`sync-toggle${syncScroll ? ' on' : ''}`} onClick={() => setSyncScroll((value) => !value)}>
-                    Sync scroll
-                  </button>
+                  <div className="snapshot-preview-actions">
+                    <button type="button" className={`sync-toggle${syncScroll ? ' on' : ''}`} onClick={() => setSyncScroll((value) => !value)}>
+                      Sync scroll
+                    </button>
+                    <button type="button" className="sync-toggle" disabled={!selectedSnapshotId} onClick={() => void handleExportSnapshot()}>
+                      Export
+                    </button>
+                  </div>
                 </div>
 
                 <div className="snapshot-preview-body" ref={previewPaneRef}>
-                  {selectedSnapshotPreview ? (
+                  {selectedSnapshotPreview && comparisonSnapshot ? (
                     <div className={`canvas-paper preview-paper${settings.canvasShadow ? ' with-shadow' : ''}`}>
-                      <div
-                        className={`preview-document align-${settings.defaultTextAlignment}`}
-                        dangerouslySetInnerHTML={{ __html: selectedSnapshotPreview.html }}
-                      />
+                      {renderComparisonDocument(true)}
                     </div>
                   ) : (
                     <div className="snapshot-preview-empty">Select a snapshot from the timeline</div>
@@ -1879,10 +2295,15 @@ export function App() {
 
       {toolbar.visible ? (
         <div className="floating-toolbar" style={{ top: toolbar.top, left: toolbar.left }}>
-          <EditorToolbarButton label="B" onClick={() => applyEditorCommand('bold')} />
-          <EditorToolbarButton label="I" onClick={() => applyEditorCommand('italic')} />
-          <EditorToolbarButton label="U" onClick={() => applyEditorCommand('underline')} />
-          <EditorToolbarButton label="S" onClick={() => applyEditorCommand('strikeThrough')} />
+          {INLINE_FORMATS.map((format) => (
+            <EditorToolbarButton
+              key={format.command}
+              label={format.label}
+              title={format.title}
+              active={activeFormats[format.command]}
+              onClick={() => applyEditorCommand(format.command)}
+            />
+          ))}
           <span className="toolbar-divider" />
           <EditorToolbarButton label="L" onClick={() => applyEditorCommand('justifyLeft')} />
           <EditorToolbarButton label="C" onClick={() => applyEditorCommand('justifyCenter')} />
@@ -1906,11 +2327,12 @@ export function App() {
           />
           <span className="toolbar-divider" />
           <div className="toolbar-swatch-row">
-            {['#FDE68A', '#BFDBFE', '#DDD6FE'].map((color) => (
+            {HIGHLIGHT_COLORS.map((color) => (
               <button
                 key={color}
                 type="button"
-                className="swatch-button"
+                className={`swatch-button${activeFormats.highlightColor === color ? ' active' : ''}`}
+                aria-label={`Highlight ${color}`}
                 style={{ background: color }}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => applyEditorCommand('hiliteColor', color)}
@@ -2367,14 +2789,22 @@ export function App() {
                 {settingsCategory === 'Export & Import' ? (
                   <>
                     <h3>Export</h3>
-                    <SettingRow label="Export current version" stacked>
-                      <div className="button-grid">
-                        {(['pdf', 'docx', 'txt', 'md', 'inkline'] as ExportFormat[]).map((format) => (
-                          <button key={format} type="button" className="outline-button" onClick={() => handleExportCurrent(format)}>
+                    <SettingRow label="Default export format">
+                      <select
+                        value={settings.defaultExportFormat}
+                        onChange={(event) =>
+                          setSettings((current) => ({
+                            ...current,
+                            defaultExportFormat: event.target.value as DefaultExportFormat
+                          }))
+                        }
+                      >
+                        {EXPORT_FORMATS.map((format) => (
+                          <option key={format} value={format}>
                             {format.toUpperCase()}
-                          </button>
+                          </option>
                         ))}
-                      </div>
+                      </select>
                     </SettingRow>
                     <SettingRow label="Export a specific snapshot">
                       <button type="button" className="outline-button" onClick={() => void handleExportSnapshot()}>
