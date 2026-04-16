@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -12,6 +13,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "2.0.0",
     "@tiptap/extension-link": "^2.11.5",
     "@tiptap/extension-placeholder": "^2.11.5",
     "@tiptap/react": "^2.11.5",
@@ -22,6 +24,7 @@
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.15",
+    "@tauri-apps/cli": "2.10.1",
     "@types/diff-match-patch": "^1.0.36",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

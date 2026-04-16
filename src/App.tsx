@@ -9,7 +9,14 @@ import {
   type KeyboardEvent,
   type ReactNode
 } from 'react';
+import { save as saveFileDialog } from '@tauri-apps/plugin-dialog';
 import { api } from './lib/api';
+import {
+  buildDefaultExportPath,
+  exportDialogFilters,
+  exportFormatExtension,
+  EXPORT_FORMAT_LABELS
+} from './lib/export';
 import type {
   AppSettings,
   AutoSnapshotFrequency,
@@ -802,10 +809,6 @@ function bytesLabel(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function exportFormatExtension(format: ExportFormat) {
-  return format === 'inkline' ? 'inkline' : format;
-}
-
 function fileTitleFromName(name: string) {
   const stripped = name.replace(/\.[^.]+$/, '').trim();
   return stripped || DEFAULT_TITLE;
@@ -833,29 +836,6 @@ function downloadTextFile(name: string, content: string, format: ExportFormat) {
   anchor.download = `${name}.${exportFormatExtension(format)}`;
   anchor.click();
   URL.revokeObjectURL(url);
-}
-
-function sanitizeExportName(value: string) {
-  const cleaned = value
-    .trim()
-    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, '-')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-
-  return cleaned || 'inkline-export';
-}
-
-function joinExportPath(directory: string, fileName: string) {
-  if (!directory.trim()) return fileName;
-  const separator = directory.includes('\\') ? '\\' : '/';
-  return `${directory.replace(/[\\/]+$/, '')}${separator}${fileName}`;
-}
-
-function buildDefaultExportPath(storage: StorageOverview | null, title: string, format: ExportFormat) {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const fileName = `${sanitizeExportName(title || DEFAULT_TITLE)}-${stamp}.${exportFormatExtension(format)}`;
-  return joinExportPath(storage?.exportsDirectory ?? '', fileName);
 }
 
 function EditorToolbarButton({
@@ -1078,7 +1058,7 @@ export function App() {
         if (projects.length === 0) {
           setProjects([activeProject]);
         }
-        await openProject(activeProject, nextSettings);
+        await openProject(activeProject);
       } catch (err) {
         if (!cancelled) {
           setError(String(err));
@@ -1368,7 +1348,7 @@ export function App() {
     });
   }, [comparisonSnapshotId, project]);
 
-  async function openProject(nextProject: ProjectMeta, incomingSettings = settings) {
+  async function openProject(nextProject: ProjectMeta) {
     const [rawDocument, savePoints, backupEntries] = await Promise.all([
       api.loadDocument(nextProject.id),
       api.getTimeline(nextProject.id),
@@ -1408,8 +1388,13 @@ export function App() {
 
     const latest = savePoints[savePoints.length - 1];
     if (latest) {
-      await loadSnapshotPreview(latest.hash);
-      lastSnapshotTextRef.current = snapshotCacheRef.current[latest.hash]?.text || nextPlainText;
+      try {
+        const preview = await loadSnapshotPreview(latest.hash, nextProject.id);
+        lastSnapshotTextRef.current = preview?.text || nextPlainText;
+      } catch (err) {
+        lastSnapshotTextRef.current = nextPlainText;
+        setError(`Snapshot preview could not be loaded: ${String(err)}`);
+      }
     } else {
       lastSnapshotTextRef.current = nextPlainText;
     }
@@ -1442,14 +1427,14 @@ export function App() {
     }
   }
 
-  async function loadSnapshotPreview(hash: string) {
-    if (!project) return null;
+  async function loadSnapshotPreview(hash: string, projectId = project?.id) {
+    if (!projectId) return null;
     if (snapshotCacheRef.current[hash]) {
       setSelectedSnapshotPreview(snapshotCacheRef.current[hash]);
       return snapshotCacheRef.current[hash];
     }
 
-    const raw = await api.getDocumentAtSavePoint(project.id, hash);
+    const raw = await api.getDocumentAtSavePoint(projectId, hash);
     const parsed = parseDocument(raw);
     const html = normalizeStoredHtml(parsed.body);
     const preview = {
@@ -1645,12 +1630,52 @@ export function App() {
     if (!selection) return;
 
     const range = document.createRange();
-    range.setStart(container, offset);
+    const maxOffset =
+      container.nodeType === Node.TEXT_NODE ? container.textContent?.length ?? 0 : container.childNodes.length;
+    range.setStart(container, Math.max(0, Math.min(offset, maxOffset)));
     range.collapse(true);
     selection.removeAllRanges();
     selection.addRange(range);
     rememberEditorSelection();
     refreshActiveFormats();
+  }
+
+  function firstCaretPosition(node: Node): { container: Node; offset: number } | null {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return { container: node, offset: 0 };
+    }
+
+    const children = Array.from(node.childNodes);
+    for (let index = 0; index < children.length; index += 1) {
+      const child = children[index];
+      if (child.nodeName === 'BR') {
+        return { container: node, offset: index };
+      }
+      const position = firstCaretPosition(child);
+      if (position) return position;
+    }
+
+    return null;
+  }
+
+  function placeCaretAtStart(node: Node) {
+    const position = firstCaretPosition(node) ?? { container: node, offset: 0 };
+    placeCaret(position.container, position.offset);
+  }
+
+  function placeCaretBeforeNode(node: Node) {
+    const parent = node.parentNode;
+    if (!parent) return;
+    const offset = Array.from(parent.childNodes).findIndex((child) => child === node);
+    placeCaret(parent, offset);
+  }
+
+  function restoreCaretAfterEditorSync() {
+    window.requestAnimationFrame(() => {
+      restoreEditorSelection();
+      refreshActiveFormats();
+      updateActiveParagraph();
+    });
   }
 
   function ensureEditableBlockContent(block: HTMLElement) {
@@ -1677,10 +1702,11 @@ export function App() {
     const block = editorBlockForSelection(range);
     if (!block || block === editor) {
       const paragraph = document.createElement('p');
-      const { container, marker } = appendCaretBreakWithFormatting(paragraph);
+      const { marker } = appendCaretBreakWithFormatting(paragraph);
       editor.appendChild(paragraph);
-      placeCaret(container, Array.from(container.childNodes).indexOf(marker));
+      placeCaretBeforeNode(marker);
       updateEditorFromDom();
+      restoreCaretAfterEditorSync();
       return;
     }
 
@@ -1695,14 +1721,15 @@ export function App() {
     if (trailing.textContent || trailing.childNodes.length > 0) {
       nextBlock.appendChild(trailing);
       block.insertAdjacentElement('afterend', nextBlock);
-      placeCaret(nextBlock, 0);
+      placeCaretAtStart(nextBlock);
     } else {
-      const { container, marker } = appendCaretBreakWithFormatting(nextBlock);
+      const { marker } = appendCaretBreakWithFormatting(nextBlock);
       block.insertAdjacentElement('afterend', nextBlock);
-      placeCaret(container, Array.from(container.childNodes).indexOf(marker));
+      placeCaretBeforeNode(marker);
     }
 
     updateEditorFromDom();
+    restoreCaretAfterEditorSync();
   }
 
   function updateEditorFromDom() {
@@ -1843,14 +1870,21 @@ export function App() {
       return;
     }
 
-    const suggestedPath = buildDefaultExportPath(storage, title, format);
-    const outputPath = window.prompt('Export to:', suggestedPath);
-    if (outputPath === null) return;
+    const projectId = project.id;
+    void (async () => {
+      const suggestedPath = buildDefaultExportPath(storage, title || DEFAULT_TITLE, format);
+      const outputPath = await saveFileDialog({
+        title: `Export ${EXPORT_FORMAT_LABELS[format]}`,
+        defaultPath: suggestedPath,
+        filters: exportDialogFilters(format),
+        canCreateDirectories: true
+      });
+      if (!outputPath) return;
 
-    void flushDocumentSave()
-      .then(() => api.exportProjectToPath(project.id, format, outputPath.trim() || suggestedPath))
-      .then((exported) => setNotice(`Exported ${exported.format.toUpperCase()} to ${exported.path}`))
-      .catch((err) => setError(`Export failed: ${String(err)}`));
+      await flushDocumentSave();
+      const exported = await api.exportProjectToPath(projectId, format, outputPath);
+      setNotice(`Exported ${exported.format.toUpperCase()} to ${exported.path}`);
+    })().catch((err) => setError(`Export failed: ${String(err)}`));
   }
 
   async function handleExportSnapshot() {

@@ -29,6 +29,11 @@ jobs:
         with:
           node-version: 20
 
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.33.0 --activate
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -45,13 +50,10 @@ jobs:
             patchelf
 
       - name: Install frontend deps
-        run: npm install
-
-      - name: Install Tauri CLI
-        run: npm install -g @tauri-apps/cli
+        run: pnpm install --frozen-lockfile
 
       - name: Build Tauri app
-        run: npm run tauri:build
+        run: pnpm run tauri:build
 
       - name: Sign Windows bundles
         if: matrix.os == 'windows-latest'
