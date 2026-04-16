@@ -2,7 +2,6 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   AppSettings,
   BackupEntry,
-  DiffResult,
   ExportFormat,
   ExportedFile,
   ProjectMeta,
@@ -23,15 +22,11 @@ export const api = {
   getTimeline: (projectId: string) => invoke<SavePoint[]>('get_timeline', { projectId }),
   getDocumentAtSavePoint: (projectId: string, hash: string) =>
     invoke<string>('get_document_at_save_point', { projectId, hash }),
-  computeDiff: (projectId: string, from: string, to: string) =>
-    invoke<DiffResult>('compute_diff', { projectId, from, to }),
   getSettings: () => invoke<AppSettings>('get_settings'),
   updateSettings: (settings: AppSettings) => invoke<void>('update_settings', { settings }),
   getStorageOverview: () => invoke<StorageOverview>('get_storage_overview'),
   listBackups: (projectId: string) => invoke<BackupEntry[]>('list_backups', { projectId }),
   createBackup: (projectId: string) => invoke<BackupEntry>('create_backup', { projectId }),
-  exportProject: (projectId: string, format: ExportFormat) =>
-    invoke<ExportedFile>('export_project', { projectId, format }),
   exportProjectToPath: (projectId: string, format: ExportFormat, outputPath: string) =>
     invoke<ExportedFile>('export_project_to_path', { projectId, format, outputPath }),
   importProject: (fileName: string, content: string, contentEncoding?: 'utf8' | 'base64') =>

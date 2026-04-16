@@ -15,22 +15,6 @@ export interface SavePoint {
   changeSize: number;
 }
 
-export interface DiffResult {
-  blocks: DiffBlock[];
-}
-
-export interface DiffBlock {
-  type: 'unchanged' | 'added' | 'deleted' | 'modified';
-  leftContent?: string;
-  rightContent?: string;
-  wordDiffs?: WordDiff[];
-}
-
-export interface WordDiff {
-  type: 'equal' | 'insert' | 'delete';
-  text: string;
-}
-
 export interface BackupEntry {
   fileName: string;
   path: string;

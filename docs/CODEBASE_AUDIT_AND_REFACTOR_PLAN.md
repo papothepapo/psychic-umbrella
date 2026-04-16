@@ -15,8 +15,8 @@ This document is for an agent continuing refactor work on Inkline. The goal is t
 3. Frontend and backend command surfaces do not match cleanly.
    The backend exposes comment and merge commands that the frontend does not call. The frontend exposes `api.computeDiff`, but the UI computes comparison blocks locally. These may be unfinished features or orphaned code and should be classified before removal.
 
-4. Dependencies include unused editor/diff packages.
-   `@tiptap/*` and `diff-match-patch` are present in `package.json` but are not imported under `src/`. Either reintroduce them intentionally or remove them to reduce bundle and maintenance surface.
+4. Dependencies previously included unused editor/diff packages.
+   `@tiptap/*`, `diff-match-patch`, and `@types/diff-match-patch` were not imported under `src/` and have now been removed.
 
 5. Release tooling needs strict reproducibility.
    The repository has `pnpm-lock.yaml`, so CI should install with pnpm and a frozen lockfile. Rust `Cargo.lock` should also be refreshed whenever Rust dependencies change.
@@ -38,6 +38,18 @@ This document is for an agent continuing refactor work on Inkline. The goal is t
 
 6. Export helper logic has been extracted into `src/lib/export.ts` as the first Phase 1 cleanup.
 
+7. Document/frontmatter/HTML helpers have been extracted into `src/lib/document.ts`.
+
+8. Settings defaults, normalization, and settings math helpers have been extracted into `src/lib/settings.ts`.
+
+9. Comparison diff helpers have been extracted into `src/lib/comparison.ts`.
+
+10. Generic caret-position helpers have been extracted into `src/lib/editorDom.ts`.
+
+11. Unused frontend API wrappers and types for `compute_diff`/default export were removed; backend command registration is inventoried in `docs/TAURI_COMMAND_INVENTORY.md`.
+
+12. Small reusable controls have been extracted into `src/components/controls.tsx`.
+
 ## Refactor Phases
 
 ### Phase 1: Split The Frontend Into Owned Modules
@@ -48,21 +60,27 @@ Suggested extraction order:
 
 1. Move pure document helpers into `src/lib/document.ts`.
    Include frontmatter parsing, composing, HTML normalization, and word/paragraph counts.
+   Status: complete.
 
 2. Keep export helpers in `src/lib/export.ts`.
    Add tests around filename sanitizing and default path generation before changing export behavior again.
+   Status: complete, tests still recommended.
 
 3. Move comparison helpers into `src/lib/comparison.ts`.
    Include tokenization, paragraph similarity, inline diff operation generation, and comparison action application.
+   Status: complete.
 
 4. Move settings defaults and normalization into `src/lib/settings.ts`.
    Keep `DEFAULT_SETTINGS`, setting option lists, and `normalizeSettings` together.
+   Status: complete.
 
 5. Move editor selection and formatting helpers into `src/lib/editorDom.ts`.
    Keep all direct DOM selection code behind named helpers so Enter, paste, toolbar formatting, and smart quotes use one path.
+   Status: partially complete. Generic caret math has moved; stateful editor commands still live in `src/App.tsx`.
 
 6. Split UI panels into components under `src/components/`.
    Start with Settings panel, Changes panel, Project sidebar, Toolbar, and Editor canvas.
+   Status: started. Shared controls have moved to `src/components/controls.tsx`; larger panels still need extraction.
 
 Verification after each extraction:
 

@@ -6,17 +6,45 @@ import {
   type CSSProperties,
   type ChangeEvent,
   type ClipboardEvent,
-  type KeyboardEvent,
-  type ReactNode
+  type KeyboardEvent
 } from 'react';
 import { save as saveFileDialog } from '@tauri-apps/plugin-dialog';
+import { EditorToolbarButton, NumberStepper, SettingRow, Toggle } from './components/controls';
 import { api } from './lib/api';
+import { applyComparisonAction, buildComparisonBlocks } from './lib/comparison';
+import {
+  composeDocument,
+  countCharacters,
+  countParagraphs,
+  countWords,
+  DEFAULT_TITLE,
+  fileTitleFromName,
+  htmlToText,
+  normalizeEditorHtml,
+  normalizeStoredHtml,
+  parseDocument,
+  readingTime,
+  textToHtml
+} from './lib/document';
+import { childNodeOffset, clampCaretOffset, firstCaretPosition } from './lib/editorDom';
 import {
   buildDefaultExportPath,
   exportDialogFilters,
   exportFormatExtension,
   EXPORT_FORMAT_LABELS
 } from './lib/export';
+import {
+  animationMultiplier,
+  clamp,
+  currentLineSpacing,
+  DEFAULT_SETTINGS,
+  FONT_OPTIONS,
+  getAutoSnapshotMinutes,
+  LANGUAGE_OPTIONS,
+  normalizeSettings,
+  pageWidthToPixels,
+  RETENTION_TO_DAYS
+} from './lib/settings';
 import type {
   AppSettings,
   AutoSnapshotFrequency,
@@ -43,18 +71,6 @@ type SettingsCategory =
   | 'Accessibility'
   | 'About';
 type SnapshotKind = 'manual' | 'auto';
-type InlineDiffOp = {
-  id: string;
-  type: 'equal' | 'insert' | 'delete';
-  text: string;
-};
-type ComparisonBlock = {
-  id: string;
-  type: 'unchanged' | 'added' | 'deleted' | 'modified';
-  baseText: string;
-  currentText: string;
-  ops: InlineDiffOp[];
-};
 type SnapshotPreview = {
   raw: string;
   html: string;
@@ -72,7 +88,6 @@ type ActiveFormats = Record<InlineFormatCommand, boolean> & {
 };
 
 const BRAND_NAME = 'Inkline';
-const DEFAULT_TITLE = 'Untitled Document';
 const SETTINGS_CATEGORIES: SettingsCategory[] = [
   'General',
   'Writing',
@@ -82,63 +97,6 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
   'Accessibility',
   'About'
 ];
-
-const FONT_OPTIONS = [
-  'Georgia',
-  'Times New Roman',
-  'Palatino',
-  'Garamond',
-  'Merriweather',
-  'Arial',
-  'Helvetica',
-  'Inter'
-];
-
-const LANGUAGE_OPTIONS = [
-  'en-US',
-  'en-GB',
-  'es-ES',
-  'fr-FR',
-  'de-DE',
-  'it-IT',
-  'pt-BR',
-  'nl-NL',
-  'sv-SE',
-  'fi-FI',
-  'da-DK',
-  'no-NO',
-  'pl-PL',
-  'cs-CZ',
-  'hu-HU',
-  'tr-TR',
-  'ru-RU',
-  'uk-UA',
-  'hi-IN',
-  'ja-JP',
-  'ko-KR',
-  'zh-CN'
-];
-
-const CANVAS_WIDTHS: Record<PageWidthPreset, number> = {
-  narrow: 760,
-  medium: 980,
-  wide: 1220
-};
-
-const FREQUENCY_TO_MINUTES: Record<Exclude<AutoSnapshotFrequency, 'custom'>, number> = {
-  '1m': 1,
-  '5m': 5,
-  '15m': 15,
-  '30m': 30,
-  '1h': 60
-};
-
-const RETENTION_TO_DAYS: Record<Exclude<SnapshotRetention, 'custom' | 'forever'>, number> = {
-  '7d': 7,
-  '30d': 30,
-  '90d': 90,
-  '1y': 365
-};
 
 const ALIGNMENT_OPTIONS: Array<{ value: TextAlignment; label: string }> = [
   { value: 'left', label: 'Left' },
@@ -164,187 +122,6 @@ const EMPTY_ACTIVE_FORMATS: ActiveFormats = {
   highlightColor: null
 };
 
-const DEFAULT_SETTINGS: AppSettings = {
-  appTheme: 'light',
-  followSystemTheme: false,
-  defaultFont: 'Georgia',
-  defaultFontSize: 16,
-  defaultLineSpacing: '1.5',
-  customLineSpacing: 1.75,
-  defaultTextAlignment: 'left',
-  paragraphSpacing: 12,
-  defaultPageWidth: 'medium',
-  language: 'en-US',
-  spellCheck: true,
-  grammarCheck: true,
-  autoCorrect: true,
-  smartQuotes: true,
-  autoCapitalizeSentences: true,
-  focusMode: false,
-  typewriterScrolling: false,
-  showFormattingMarks: false,
-  showWordCount: true,
-  showCharacterCount: false,
-  showParagraphCount: false,
-  showReadingTime: false,
-  showWordGoal: false,
-  wordGoalTarget: 80000,
-  wordGoalDisplay: 'fraction',
-  highlightCurrentLine: false,
-  cursorStyle: 'line',
-  cursorBlink: true,
-  doubleClickSelectsWord: true,
-  tripleClickSelectsParagraph: true,
-  pastePlainTextByDefault: false,
-  autoSnapshotsEnabled: true,
-  autoSnapshotFrequency: '15m',
-  autoSnapshotCustomMinutes: 15,
-  snapshotOnlyWhenChangesExist: true,
-  autoSnapshotNaming: true,
-  keepSnapshotsFor: 'forever',
-  customRetentionDays: 30,
-  maximumSnapshotsEnabled: false,
-  maximumSnapshots: 100,
-  snapshotLimitBehavior: 'deleteOldestAuto',
-  hiddenSnapshotHashes: [],
-  canvasWidth: 'medium',
-  canvasShadow: true,
-  showPageRuler: false,
-  paragraphIndentStyle: 'block',
-  deletionColor: '#DC2626',
-  additionColor: '#16A34A',
-  usePatternsInsteadOfColor: false,
-  diffHighlightOpacity: 60,
-  animationSpeed: 'normal',
-  reduceMotion: false,
-  includeDocumentTitleInExport: true,
-  includePageNumbersInPdf: true,
-  pdfPageSize: 'A4',
-  pdfMargins: 'normal',
-  includeAuthorNameInExport: false,
-  authorName: '',
-  exportWithComparisonMarkup: false,
-  importMode: 'newDocument',
-  fontScaling: 100,
-  highContrastMode: false,
-  screenReaderSupport: true,
-  keyboardNavigation: true,
-  tooltipDelay: 500,
-  focusIndicators: 'default',
-  dyslexiaFriendlyFont: false,
-  lineFocusHighlight: false,
-  projectsDirectory: '',
-  backupsDirectory: '',
-  exportsDirectory: '',
-  defaultExportFormat: 'inkline'
-};
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function normalizeSettings(input?: Partial<AppSettings> | null): AppSettings {
-  const settings = {
-    ...DEFAULT_SETTINGS,
-    ...input
-  };
-
-  const font = FONT_OPTIONS.includes(settings.defaultFont) ? settings.defaultFont : DEFAULT_SETTINGS.defaultFont;
-  const pageWidth = settings.defaultPageWidth;
-  const canvasWidth = settings.canvasWidth;
-
-  return {
-    ...settings,
-    appTheme: ['light', 'dark', 'sepia'].includes(settings.appTheme) ? settings.appTheme : DEFAULT_SETTINGS.appTheme,
-    defaultFont: font,
-    defaultFontSize: clamp(Number(settings.defaultFontSize || DEFAULT_SETTINGS.defaultFontSize), 8, 72),
-    customLineSpacing: clamp(Number(settings.customLineSpacing || DEFAULT_SETTINGS.customLineSpacing), 1, 3),
-    paragraphSpacing: clamp(Number(settings.paragraphSpacing || DEFAULT_SETTINGS.paragraphSpacing), 0, 40),
-    defaultPageWidth: ['narrow', 'medium', 'wide'].includes(pageWidth) ? pageWidth : DEFAULT_SETTINGS.defaultPageWidth,
-    language: LANGUAGE_OPTIONS.includes(settings.language) ? settings.language : DEFAULT_SETTINGS.language,
-    wordGoalTarget: clamp(Number(settings.wordGoalTarget || DEFAULT_SETTINGS.wordGoalTarget), 1, 9999999),
-    autoSnapshotCustomMinutes: clamp(
-      Number(settings.autoSnapshotCustomMinutes || DEFAULT_SETTINGS.autoSnapshotCustomMinutes),
-      1,
-      1440
-    ),
-    customRetentionDays: clamp(Number(settings.customRetentionDays || DEFAULT_SETTINGS.customRetentionDays), 1, 3650),
-    maximumSnapshots: clamp(Number(settings.maximumSnapshots || DEFAULT_SETTINGS.maximumSnapshots), 1, 10000),
-    hiddenSnapshotHashes: Array.isArray(settings.hiddenSnapshotHashes) ? settings.hiddenSnapshotHashes : [],
-    canvasWidth: ['narrow', 'medium', 'wide'].includes(canvasWidth) ? canvasWidth : DEFAULT_SETTINGS.canvasWidth,
-    diffHighlightOpacity: clamp(Number(settings.diffHighlightOpacity || DEFAULT_SETTINGS.diffHighlightOpacity), 0, 100),
-    fontScaling: clamp(Number(settings.fontScaling || DEFAULT_SETTINGS.fontScaling), 80, 150),
-    tooltipDelay: clamp(Number(settings.tooltipDelay || DEFAULT_SETTINGS.tooltipDelay), 0, 1000),
-    deletionColor: settings.deletionColor || DEFAULT_SETTINGS.deletionColor,
-    additionColor: settings.additionColor || DEFAULT_SETTINGS.additionColor,
-    defaultExportFormat: (['pdf', 'docx', 'txt', 'md', 'inkline'] as DefaultExportFormat[]).includes(
-      settings.defaultExportFormat
-    )
-      ? settings.defaultExportFormat
-      : DEFAULT_SETTINGS.defaultExportFormat
-  };
-}
-
-function parseDocument(raw: string) {
-  if (!raw.startsWith('---\n')) {
-    return { meta: {} as Record<string, string>, body: raw };
-  }
-
-  const end = raw.indexOf('\n---\n');
-  if (end === -1) {
-    return { meta: {} as Record<string, string>, body: raw };
-  }
-
-  const metaLines = raw.slice(4, end).split('\n');
-  const meta: Record<string, string> = {};
-
-  for (const line of metaLines) {
-    const separator = line.indexOf(':');
-    if (separator === -1) continue;
-    const key = line.slice(0, separator).trim();
-    const value = line.slice(separator + 1).trim().replace(/^['"]|['"]$/g, '');
-    meta[key] = value;
-  }
-
-  return {
-    meta,
-    body: raw.slice(end + 5).replace(/^\n/, '')
-  };
-}
-
-function formatFrontmatterValue(value: string) {
-  return /^[A-Za-z0-9._:/+-]+$/.test(value) ? value : JSON.stringify(value);
-}
-
-function composeDocument(meta: Record<string, string>, title: string, body: string) {
-  const nextMeta: Record<string, string> = {
-    ...meta,
-    title: title.trim() || DEFAULT_TITLE,
-    modified: new Date().toISOString()
-  };
-
-  if (!nextMeta.created) {
-    nextMeta.created = new Date().toISOString();
-  }
-
-  const keys = [
-    ...['title', 'created', 'modified', 'id'].filter((key) => key in nextMeta),
-    ...Object.keys(nextMeta).filter((key) => !['title', 'created', 'modified', 'id'].includes(key))
-  ];
-
-  const frontmatter = keys.map((key) => `${key}: ${formatFrontmatterValue(nextMeta[key])}`).join('\n');
-  return `---\n${frontmatter}\n---\n\n${body}`;
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 function normalizeColorValue(value: string) {
   const trimmed = value.trim();
   if (!trimmed || trimmed === 'transparent' || trimmed === 'rgba(0, 0, 0, 0)') {
@@ -366,66 +143,6 @@ function normalizeColorValue(value: string) {
     .map((part) => Number(part).toString(16).padStart(2, '0'))
     .join('')
     .toUpperCase()}`;
-}
-
-function textToHtml(text: string) {
-  const paragraphs = text
-    .replace(/\r\n/g, '\n')
-    .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trimEnd())
-    .filter(Boolean);
-
-  if (paragraphs.length === 0) {
-    return '';
-  }
-
-  return paragraphs
-    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, '<br />')}</p>`)
-    .join('');
-}
-
-function looksLikeHtml(value: string) {
-  return /<\/?[a-z][\s\S]*>/i.test(value);
-}
-
-function normalizeStoredHtml(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  return looksLikeHtml(trimmed) ? trimmed : textToHtml(value);
-}
-
-function htmlToText(html: string) {
-  if (!html.trim()) {
-    return '';
-  }
-
-  const container = document.createElement('div');
-  container.innerHTML = html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|li|h1|h2|h3|h4|h5|h6|blockquote)>/gi, '\n\n')
-    .replace(/<(ul|ol)[^>]*>/gi, '\n');
-
-  return (container.textContent || '')
-    .replace(/\u00a0/g, ' ')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function countWords(text: string) {
-  return text.trim() ? text.trim().split(/\s+/).length : 0;
-}
-
-function countCharacters(text: string) {
-  return text.length;
-}
-
-function countParagraphs(text: string) {
-  return text.trim() ? text.split(/\n{2,}/).filter((paragraph) => paragraph.trim()).length : 0;
-}
-
-function readingTime(words: number) {
-  return words === 0 ? '~0 min read' : `~${Math.max(1, Math.round(words / 200))} min read`;
 }
 
 function formatDateTime(timestamp: string) {
@@ -457,49 +174,12 @@ function formatRelativeTime(timestamp: string, now: number) {
   return `${deltaDays} days ago`;
 }
 
-function pageWidthToPixels(width: PageWidthPreset) {
-  return CANVAS_WIDTHS[width];
-}
-
-function currentLineSpacing(settings: AppSettings) {
-  switch (settings.defaultLineSpacing) {
-    case 'single':
-      return 1;
-    case '1.15':
-      return 1.15;
-    case '1.5':
-      return 1.5;
-    case 'double':
-      return 2;
-    case 'custom':
-      return settings.customLineSpacing;
-    default:
-      return 1.5;
-  }
-}
-
-function animationMultiplier(settings: AppSettings) {
-  if (settings.reduceMotion || settings.animationSpeed === 'off') {
-    return 0;
-  }
-
-  if (settings.animationSpeed === 'slow') return 1.45;
-  if (settings.animationSpeed === 'fast') return 0.7;
-  return 1;
-}
-
 function getPreferredSystemTheme(): SystemTheme {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
     return 'light';
   }
 
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-}
-
-function getAutoSnapshotMinutes(settings: AppSettings) {
-  return settings.autoSnapshotFrequency === 'custom'
-    ? settings.autoSnapshotCustomMinutes
-    : FREQUENCY_TO_MINUTES[settings.autoSnapshotFrequency];
 }
 
 function isAutoSnapshot(snapshot: SavePoint) {
@@ -518,300 +198,10 @@ function manualSnapshotLabel(name: string) {
   return name.trim() || formatDateTime(new Date().toISOString());
 }
 
-function normalizeEditorHtml(html: string) {
-  const normalized = html
-    .replace(/<div><br><\/div>/gi, '<p><br></p>')
-    .replace(/<div>/gi, '<p>')
-    .replace(/<\/div>/gi, '</p>')
-    .replace(/<p>(\s|&nbsp;)*<\/p>/gi, '<p><br></p>')
-    .trim();
-
-  return htmlToText(normalized).trim() || /<br\s*\/?>/i.test(normalized) ? normalized : '';
-}
-
-function tokenizeForInlineDiff(text: string) {
-  return text.match(/\S+\s*|\s+/g) ?? [];
-}
-
-function normalizeTokens(text: string) {
-  return text
-    .split(/\s+/)
-    .map((token) => token.trim().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '').toLowerCase())
-    .filter(Boolean);
-}
-
-function paragraphSimilarity(left: string, right: string) {
-  const leftTokens = normalizeTokens(left);
-  const rightTokens = normalizeTokens(right);
-
-  if (leftTokens.length === 0 && rightTokens.length === 0) {
-    return 1;
-  }
-
-  const leftCounts = new Map<string, number>();
-  const rightCounts = new Map<string, number>();
-
-  for (const token of leftTokens) {
-    leftCounts.set(token, (leftCounts.get(token) ?? 0) + 1);
-  }
-
-  for (const token of rightTokens) {
-    rightCounts.set(token, (rightCounts.get(token) ?? 0) + 1);
-  }
-
-  let overlap = 0;
-  let total = 0;
-
-  for (const [token, count] of leftCounts.entries()) {
-    const rightCount = rightCounts.get(token) ?? 0;
-    overlap += Math.min(count, rightCount);
-    total += Math.max(count, rightCount);
-  }
-
-  for (const [token, count] of rightCounts.entries()) {
-    if (!leftCounts.has(token)) {
-      total += count;
-    }
-  }
-
-  return total === 0 ? 0 : overlap / total;
-}
-
-function substitutionCost(left: string, right: string) {
-  if (left === right) return 0;
-  return paragraphSimilarity(left, right) >= 0.35 ? 1 : 2;
-}
-
-function buildInlineDiff(left: string, right: string, blockId: string): InlineDiffOp[] {
-  const leftTokens = tokenizeForInlineDiff(left);
-  const rightTokens = tokenizeForInlineDiff(right);
-  const n = leftTokens.length;
-  const m = rightTokens.length;
-  const dp = Array.from({ length: n + 1 }, () => Array<number>(m + 1).fill(0));
-
-  for (let i = n - 1; i >= 0; i -= 1) {
-    for (let j = m - 1; j >= 0; j -= 1) {
-      dp[i][j] =
-        leftTokens[i] === rightTokens[j]
-          ? dp[i + 1][j + 1] + 1
-          : Math.max(dp[i + 1][j], dp[i][j + 1]);
-    }
-  }
-
-  const ops: InlineDiffOp[] = [];
-  let i = 0;
-  let j = 0;
-  let index = 0;
-
-  while (i < n && j < m) {
-    if (leftTokens[i] === rightTokens[j]) {
-      ops.push({ id: `${blockId}-equal-${index}`, type: 'equal', text: leftTokens[i] });
-      i += 1;
-      j += 1;
-      index += 1;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      ops.push({ id: `${blockId}-delete-${index}`, type: 'delete', text: leftTokens[i] });
-      i += 1;
-      index += 1;
-    } else {
-      ops.push({ id: `${blockId}-insert-${index}`, type: 'insert', text: rightTokens[j] });
-      j += 1;
-      index += 1;
-    }
-  }
-
-  while (i < n) {
-    ops.push({ id: `${blockId}-delete-${index}`, type: 'delete', text: leftTokens[i] });
-    i += 1;
-    index += 1;
-  }
-
-  while (j < m) {
-    ops.push({ id: `${blockId}-insert-${index}`, type: 'insert', text: rightTokens[j] });
-    j += 1;
-    index += 1;
-  }
-
-  return ops;
-}
-
-function splitParagraphs(text: string) {
-  return text
-    .replace(/\r\n/g, '\n')
-    .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean);
-}
-
-function buildComparisonBlocks(baseText: string, currentText: string) {
-  const baseParagraphs = splitParagraphs(baseText);
-  const currentParagraphs = splitParagraphs(currentText);
-  const n = baseParagraphs.length;
-  const m = currentParagraphs.length;
-  const dp = Array.from({ length: n + 1 }, () => Array<number>(m + 1).fill(0));
-
-  for (let i = n; i >= 0; i -= 1) {
-    for (let j = m; j >= 0; j -= 1) {
-      if (i === n) {
-        dp[i][j] = m - j;
-        continue;
-      }
-      if (j === m) {
-        dp[i][j] = n - i;
-        continue;
-      }
-
-      const replaceCost = substitutionCost(baseParagraphs[i], currentParagraphs[j]) + dp[i + 1][j + 1];
-      const deleteCost = 1 + dp[i + 1][j];
-      const insertCost = 1 + dp[i][j + 1];
-      dp[i][j] = Math.min(replaceCost, deleteCost, insertCost);
-    }
-  }
-
-  const blocks: ComparisonBlock[] = [];
-  let i = 0;
-  let j = 0;
-
-  while (i < n || j < m) {
-    const id = `block-${i}-${j}`;
-
-    if (i === n) {
-      blocks.push({
-        id,
-        type: 'added',
-        baseText: '',
-        currentText: currentParagraphs[j],
-        ops: [{ id: `${id}-insert`, type: 'insert', text: currentParagraphs[j] }]
-      });
-      j += 1;
-      continue;
-    }
-
-    if (j === m) {
-      blocks.push({
-        id,
-        type: 'deleted',
-        baseText: baseParagraphs[i],
-        currentText: '',
-        ops: [{ id: `${id}-delete`, type: 'delete', text: baseParagraphs[i] }]
-      });
-      i += 1;
-      continue;
-    }
-
-    if (baseParagraphs[i] === currentParagraphs[j] && dp[i][j] === dp[i + 1][j + 1]) {
-      blocks.push({
-        id,
-        type: 'unchanged',
-        baseText: baseParagraphs[i],
-        currentText: currentParagraphs[j],
-        ops: [{ id: `${id}-equal`, type: 'equal', text: currentParagraphs[j] }]
-      });
-      i += 1;
-      j += 1;
-      continue;
-    }
-
-    const replacePenalty = substitutionCost(baseParagraphs[i], currentParagraphs[j]);
-    const replaceCost = replacePenalty + dp[i + 1][j + 1];
-    const deleteCost = 1 + dp[i + 1][j];
-    const insertCost = 1 + dp[i][j + 1];
-
-    if (replacePenalty === 1 && dp[i][j] === replaceCost && replaceCost <= deleteCost && replaceCost <= insertCost) {
-      blocks.push({
-        id,
-        type: 'modified',
-        baseText: baseParagraphs[i],
-        currentText: currentParagraphs[j],
-        ops: buildInlineDiff(baseParagraphs[i], currentParagraphs[j], id)
-      });
-      i += 1;
-      j += 1;
-    } else if (dp[i][j] === deleteCost && deleteCost <= insertCost) {
-      blocks.push({
-        id,
-        type: 'deleted',
-        baseText: baseParagraphs[i],
-        currentText: '',
-        ops: [{ id: `${id}-delete`, type: 'delete', text: baseParagraphs[i] }]
-      });
-      i += 1;
-    } else {
-      blocks.push({
-        id,
-        type: 'added',
-        baseText: '',
-        currentText: currentParagraphs[j],
-        ops: [{ id: `${id}-insert`, type: 'insert', text: currentParagraphs[j] }]
-      });
-      j += 1;
-    }
-  }
-
-  return blocks;
-}
-
-function applyComparisonAction(
-  blocks: ComparisonBlock[],
-  targetBlockId: string,
-  targetOpId: string | null,
-  action: 'restore' | 'remove'
-) {
-  const paragraphs: string[] = [];
-
-  for (const block of blocks) {
-    if (block.type === 'unchanged') {
-      paragraphs.push(block.currentText);
-      continue;
-    }
-
-    if (block.type === 'added') {
-      if (!(block.id === targetBlockId && action === 'remove')) {
-        paragraphs.push(block.currentText);
-      }
-      continue;
-    }
-
-    if (block.type === 'deleted') {
-      if (block.id === targetBlockId && action === 'restore') {
-        paragraphs.push(block.baseText);
-      }
-      continue;
-    }
-
-    let paragraph = '';
-    for (const op of block.ops) {
-      if (op.type === 'equal') {
-        paragraph += op.text;
-      } else if (op.type === 'insert') {
-        if (!(block.id === targetBlockId && op.id === targetOpId && action === 'remove')) {
-          paragraph += op.text;
-        }
-      } else if (op.type === 'delete') {
-        if (block.id === targetBlockId && op.id === targetOpId && action === 'restore') {
-          paragraph += op.text;
-        }
-      }
-    }
-
-    const cleaned = paragraph.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-    if (cleaned) {
-      paragraphs.push(cleaned);
-    }
-  }
-
-  return paragraphs.join('\n\n');
-}
-
 function bytesLabel(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function fileTitleFromName(name: string) {
-  const stripped = name.replace(/\.[^.]+$/, '').trim();
-  return stripped || DEFAULT_TITLE;
 }
 
 function buildWordGoalLabel(words: number, goal: number, display: WordGoalDisplay) {
@@ -836,108 +226,6 @@ function downloadTextFile(name: string, content: string, format: ExportFormat) {
   anchor.download = `${name}.${exportFormatExtension(format)}`;
   anchor.click();
   URL.revokeObjectURL(url);
-}
-
-function EditorToolbarButton({
-  label,
-  title,
-  onClick,
-  active = false
-}: {
-  label: string;
-  title?: string;
-  onClick: () => void;
-  active?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      className={`toolbar-button${active ? ' active' : ''}`}
-      aria-pressed={active}
-      title={title ?? label}
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={onClick}
-    >
-      {label}
-    </button>
-  );
-}
-
-function SettingRow({
-  label,
-  description,
-  stacked = false,
-  children
-}: {
-  label: string;
-  description?: string;
-  stacked?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div className={`setting-row${stacked ? ' stacked' : ''}`}>
-      <div className="setting-copy">
-        <div className="setting-label">{label}</div>
-        {description ? <div className="setting-description">{description}</div> : null}
-      </div>
-      <div className="setting-control">{children}</div>
-    </div>
-  );
-}
-
-function Toggle({
-  checked,
-  onChange,
-  label
-}: {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  label?: string;
-}) {
-  return (
-    <button
-      type="button"
-      className={`toggle${checked ? ' checked' : ''}`}
-      aria-pressed={checked}
-      onClick={() => onChange(!checked)}
-    >
-      <span className="toggle-thumb" />
-      {label ? <span>{label}</span> : null}
-    </button>
-  );
-}
-
-function NumberStepper({
-  value,
-  min,
-  max,
-  step = 1,
-  onChange
-}: {
-  value: number;
-  min: number;
-  max: number;
-  step?: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <div className="stepper">
-      <button type="button" onClick={() => onChange(clamp(value - step, min, max))}>
-        −
-      </button>
-      <input
-        type="number"
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        onChange={(event) => onChange(clamp(Number(event.target.value || value), min, max))}
-      />
-      <button type="button" onClick={() => onChange(clamp(value + step, min, max))}>
-        +
-      </button>
-    </div>
-  );
 }
 
 export function App() {
@@ -1630,32 +918,12 @@ export function App() {
     if (!selection) return;
 
     const range = document.createRange();
-    const maxOffset =
-      container.nodeType === Node.TEXT_NODE ? container.textContent?.length ?? 0 : container.childNodes.length;
-    range.setStart(container, Math.max(0, Math.min(offset, maxOffset)));
+    range.setStart(container, clampCaretOffset(container, offset));
     range.collapse(true);
     selection.removeAllRanges();
     selection.addRange(range);
     rememberEditorSelection();
     refreshActiveFormats();
-  }
-
-  function firstCaretPosition(node: Node): { container: Node; offset: number } | null {
-    if (node.nodeType === Node.TEXT_NODE) {
-      return { container: node, offset: 0 };
-    }
-
-    const children = Array.from(node.childNodes);
-    for (let index = 0; index < children.length; index += 1) {
-      const child = children[index];
-      if (child.nodeName === 'BR') {
-        return { container: node, offset: index };
-      }
-      const position = firstCaretPosition(child);
-      if (position) return position;
-    }
-
-    return null;
   }
 
   function placeCaretAtStart(node: Node) {
@@ -1666,8 +934,7 @@ export function App() {
   function placeCaretBeforeNode(node: Node) {
     const parent = node.parentNode;
     if (!parent) return;
-    const offset = Array.from(parent.childNodes).findIndex((child) => child === node);
-    placeCaret(parent, offset);
+    placeCaret(parent, childNodeOffset(parent, node));
   }
 
   function restoreCaretAfterEditorSync() {
